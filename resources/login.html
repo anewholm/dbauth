@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=0">
+        <meta name="robots" content="noindex">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <meta name="backend-base-path" content="/backend">
+        <meta name="csrf-token" content="4RA3UNFPLqfbwyX02dp8WN2LWRmEbR2Da5eCN8Gm">
+        <link rel="icon" type="image/png" href="/modules/backend/assets/images/favicon.png">
+        <title>Administration Area</title>
+        <link href="/modules/system/assets/ui/storm.css?v=1" rel="stylesheet" importance="high">
+        <link href="/modules/system/assets/ui/storm.css?v=1" rel="preload" as="style" importance="high">
+        <link href="/modules/system/assets/ui/icons.css?v=1" rel="stylesheet" importance="high">
+        <link href="/modules/system/assets/ui/icons.css?v=1" rel="preload" as="style" importance="high">
+        <link href="/modules/backend/assets/css/winter.css?v=1" rel="stylesheet" importance="high">
+        <link href="/modules/backend/assets/css/winter.css?v=1" rel="preload" as="style" importance="high">
+    
+        <script data-cfasync="false" src="/modules/backend/assets/js/vendor/jquery.min.js?v=1" importance="high"></script>
+        <link href="/modules/backend/assets/js/vendor/jquery.min.js?v=1" rel="preload" as="script" importance="high">
+        <script data-cfasync="false" src="/modules/backend/assets/js/vendor/jquery-migrate.min.js?v=1" importance="high"></script>
+        <link href="/modules/backend/assets/js/vendor/jquery-migrate.min.js?v=1" rel="preload" as="script" importance="high">
+        <script data-cfasync="false" src="/modules/system/assets/js/framework.js?v=1" importance="high"></script>
+        <link href="/modules/system/assets/js/framework.js?v=1" rel="preload" as="script" importance="high">
+        <script data-cfasync="false" src="/modules/system/assets/ui/storm-min.js?v=1" importance="high"></script>
+        <link href="/modules/system/assets/ui/storm-min.js?v=1" rel="preload" as="script" importance="high">
+        <script data-cfasync="false" src="/modules/backend/assets/js/winter-min.js?v=1" importance="high"></script>
+        <link href="/modules/backend/assets/js/winter-min.js?v=1" rel="preload" as="script" importance="high">
+        <script data-cfasync="false" src="/modules/backend/assets/js/auth/auth.js?v=1" importance="high"></script>
+        <link href="/modules/backend/assets/js/auth/auth.js?v=1" rel="preload" as="script" importance="high">
+        <script data-cfasync="false" src="/modules/system/assets/js/lang/lang.en.js?v=1" importance="high"></script>
+        <link href="/modules/system/assets/js/lang/lang.en.js?v=1" rel="preload" as="script" importance="high">
+    
+        <script>
+            "use strict";
+            /* Only run on HTTPS connections
+            * Block off Front-end Service Worker from running in the Backend allowing security injections, see GitHub #4384
+            */
+            if (location.protocol === 'https:') {
+                // Unregister all service workers before signing in to prevent cache issues, see github issue: #3707
+                navigator.serviceWorker.getRegistrations().then(
+                    function (registrations) {
+                        registrations.forEach(function (registration) {
+                            registration.unregister();
+                        });
+                    }
+                );
+            }
+        </script>
+    </head>
+
+    <body class="outer signin preload">
+        <div id="layout-canvas">
+            <div class="layout">
+                <div class="layout-row min-size layout-head">
+                    <div class="layout-cell">
+                        <h1>Secure System</h1>
+                    </div>
+                </div>
+
+                <div class="layout-row">
+                    <div class="layout-cell">
+                        <div class="outer-form-container">
+                            <form method="POST" action="/backend/backend/auth/signin" accept-charset="UTF-8">
+                                <input name="_session_key" type="hidden" value="[SESSION_KEY]" id="">
+                                <input name="_token" type="hidden" value="[TOKEN]" id="">    
+                                <input type="hidden" name="postback" value="1" />
+
+                                <div class="form-elements" role="form">
+                                    <div class="form-group text-field horizontal-form">
+
+                                        <!-- Login -->
+                                        <input
+                                            type="text"
+                                            name="login"
+                                            value=""
+                                            class="form-control icon user"
+                                            placeholder="login"
+                                            autocomplete="off"
+                                            maxlength="255" />
+
+                                        <!-- Password -->
+                                        <input
+                                            type="password"
+                                            name="password"
+                                            value=""
+                                            class="form-control icon lock"
+                                            placeholder="password"
+                                            autocomplete="off"
+                                            maxlength="255" />
+
+                                        <!-- Submit Login -->
+                                        <button type="submit" class="btn btn-primary login-button">
+                                            Login To Database
+                                        </button>
+                                    </div>
+
+                                    
+                                    <p class="wn-icon-lock pull-right forgot-password">
+                                        <!-- Forgot your password? -->
+                                        <a href="/backend/backend/auth/restore" class="text-muted">
+                                            Forgot your password?           
+                                        </a>
+                                    </p>
+                                </div>
+                            </form>                        
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Flash Messages -->
+        <div id="layout-flash-messages"></div>
+    </body>
+</html>
