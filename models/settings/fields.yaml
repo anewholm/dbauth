@@ -1,0 +1,7 @@
+fields:
+    auto_create_user:
+        label: Auto Create the backend_users user
+        type: checkbox
+        span: left
+        comment: If the login is successful with the PostGreSQL user, then the backend_users record will be automatically created
+        default: 1
