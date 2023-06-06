@@ -6,7 +6,7 @@
         <meta name="robots" content="noindex">
         <meta name="apple-mobile-web-app-capable" content="yes">
         <meta name="backend-base-path" content="/backend">
-        <meta name="csrf-token" content="4RA3UNFPLqfbwyX02dp8WN2LWRmEbR2Da5eCN8Gm">
+        <meta name="csrf-token" content="<?= $xsrf; ?>">
         <link rel="icon" type="image/png" href="/modules/backend/assets/images/favicon.png">
         <title>Administration Area</title>
         <link href="/modules/system/assets/ui/storm.css?v=1" rel="stylesheet" importance="high">
@@ -15,21 +15,6 @@
         <link href="/modules/system/assets/ui/icons.css?v=1" rel="preload" as="style" importance="high">
         <link href="/modules/backend/assets/css/winter.css?v=1" rel="stylesheet" importance="high">
         <link href="/modules/backend/assets/css/winter.css?v=1" rel="preload" as="style" importance="high">
-    
-        <script data-cfasync="false" src="/modules/backend/assets/js/vendor/jquery.min.js?v=1" importance="high"></script>
-        <link href="/modules/backend/assets/js/vendor/jquery.min.js?v=1" rel="preload" as="script" importance="high">
-        <script data-cfasync="false" src="/modules/backend/assets/js/vendor/jquery-migrate.min.js?v=1" importance="high"></script>
-        <link href="/modules/backend/assets/js/vendor/jquery-migrate.min.js?v=1" rel="preload" as="script" importance="high">
-        <script data-cfasync="false" src="/modules/system/assets/js/framework.js?v=1" importance="high"></script>
-        <link href="/modules/system/assets/js/framework.js?v=1" rel="preload" as="script" importance="high">
-        <script data-cfasync="false" src="/modules/system/assets/ui/storm-min.js?v=1" importance="high"></script>
-        <link href="/modules/system/assets/ui/storm-min.js?v=1" rel="preload" as="script" importance="high">
-        <script data-cfasync="false" src="/modules/backend/assets/js/winter-min.js?v=1" importance="high"></script>
-        <link href="/modules/backend/assets/js/winter-min.js?v=1" rel="preload" as="script" importance="high">
-        <script data-cfasync="false" src="/modules/backend/assets/js/auth/auth.js?v=1" importance="high"></script>
-        <link href="/modules/backend/assets/js/auth/auth.js?v=1" rel="preload" as="script" importance="high">
-        <script data-cfasync="false" src="/modules/system/assets/js/lang/lang.en.js?v=1" importance="high"></script>
-        <link href="/modules/system/assets/js/lang/lang.en.js?v=1" rel="preload" as="script" importance="high">
     
         <script>
             "use strict";
@@ -68,9 +53,7 @@
                 <div class="layout-row">
                     <div class="layout-cell">
                         <div class="outer-form-container">
-                            <form method="POST" action="/backend/backend/auth/signin" accept-charset="UTF-8">
-                                <input name="_session_key" type="hidden" value="[SESSION_KEY]" id="">
-                                <input name="_token" type="hidden" value="[TOKEN]" id="">    
+                            <?= Form::open() ?>
                                 <input type="hidden" name="postback" value="1" />
 
                                 <div class="form-elements" role="form">
@@ -105,12 +88,13 @@
                                     
                                     <p class="wn-icon-lock pull-right forgot-password">
                                         <!-- Forgot your password? -->
-                                        <a href="/backend/backend/auth/restore" class="text-muted">
-                                            Forgot your password?           
+                                        <a name="/backend/backend/auth/restore" class="text-muted">
+                                            Forgot your password?<br/>
+                                            Please talk with a Systems Administrator.
                                         </a>
                                     </p>
                                 </div>
-                            </form>                        
+                            <?= Form::close() ?>
                         </div>
 
                         <!-- Flash Messages -->
