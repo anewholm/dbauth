@@ -47,6 +47,13 @@
                 );
             }
         </script>
+
+        <style>
+            #layout-canvas .flash-message.fade {
+                display:block;
+                opacity:1;
+            }
+        </style>
     </head>
 
     <body class="outer signin preload">
@@ -105,12 +112,20 @@
                                 </div>
                             </form>                        
                         </div>
+
+                        <!-- Flash Messages -->
+                        <div id="layout-flash-messages">
+                            <?php if ($ex): ?>
+                                <p class="flash-message fade error" data-interval="5">
+                                    <?= substr(preg_replace('#/var/www/.*|[(]?SQL:.*#', '', $ex->getMessage()), 0, 500); ?>.
+                                    <button type="button" class="close" aria-hidden="true">×</button>
+                                </p>
+                            <?php endif ?>            
+                        </div>
+                
                     </div>
                 </div>
             </div>
         </div>
-
-        <!-- Flash Messages -->
-        <div id="layout-flash-messages"></div>
     </body>
 </html>

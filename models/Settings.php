@@ -1,4 +1,4 @@
-<?php namespace AcornAssociated\Auth\Models;
+<?php namespace DBAuth\Models;
 
 use Model;
 use BackendMenu;
