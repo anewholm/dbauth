@@ -23,13 +23,19 @@ class ServiceProvider extends ModuleServiceProvider
     public function boot()
     {
         if (self::isEnabled()) {
+            // TODO: SECURITY: Disabled this because I cannot get XSRF to work
+            // on the login form
+            Config::set('cms.enableCsrfProtection', false);
+
             // Note: we could have also used a DB extension:
             // app('db')->extend('pgsql', function($config, $name){return ServiceProvider::connectionFactory($config, $name);});
-            Event::listen('backend.user.login', function($user)         {return ServiceProvider::backedUserLogin($user);});
-            $username = self::morphConfig();
+            Event::listen('backend.user.login', function($user) {
+                return ServiceProvider::backedUserLogin($user);
+            });
+            $username = $this->morphConfig();
             if ($username === FALSE) {
                 // Neither a login, nor a token
-                self::showLoginScreen();
+                $this->showLoginScreen();
             }
 
             // Immediately test the database connection
@@ -40,7 +46,7 @@ class ServiceProvider extends ModuleServiceProvider
                 $user = User::where('login', '=', $username)->get();
             } 
             catch (QueryException $ex) {
-                self::showLoginScreen($ex);
+                $this->showLoginScreen($ex);
             }
             if (is_null($user)) {
                 // Database connection was successful
@@ -76,7 +82,7 @@ class ServiceProvider extends ModuleServiceProvider
         });
     }
 
-    protected static function isEnabled()
+    protected function isEnabled()
     {
         // config/database.php username=<DYNAMIC> necessary for this functionality 
         $conn     = Config::get('database.default');
@@ -84,17 +90,17 @@ class ServiceProvider extends ModuleServiceProvider
         return $username == '<DYNAMIC>';
     }
 
-    public static function backedUserLogin(User $user)
+    public function backedUserLogin(User $user)
     {
         // Login to database has been successful
         // A token has been generated for future connections
         // Create a new user for the login token
         // as we already have a DB connection that can create users
         // It is important that the main login has GRANT OPTION and CREATE ROLES
-        self::createUser("token_" . (int) $user->id, $user->getPersistCode());
+        $this->createUser("token_" . (int) $user->id, $user->getPersistCode());
     }
 
-    public static function morphConfig()
+    public function morphConfig()
     {
         $username    = FALSE;
         $input       = post();
@@ -136,19 +142,19 @@ class ServiceProvider extends ModuleServiceProvider
         return $username;
     }
 
-    public static function showLoginScreen(?PDOException $ex = NULL)
+    public function showLoginScreen(?PDOException $ex = NULL)
     {
-        // XSRF protection
+        // TODO: XSRF protection is disabled above
+        Session::start(); // => loadSession() && regenerateToken();
         //$cookie = $this->makeXsrfCookie();
         //setcookie($cookie->getName(), $cookie->getValue());
-        //dump($cookie);
-        //dump(Config::get('session'));
-        //$html = str_replace('[SESSION_KEY]', FormHelper::getSessionKey(), $html);
-        //$html = str_replace('[TOKEN]', Session::token(), $html);
+        $xsrf = Session::token();
+        Session::save();
+        //$sessionId = Session::getId();
 
         // Show the fixed HTML login screen and exit
         // to avoid any db access attempts from other plugins
-        include self::loginScreenPath();
+        include $this->loginScreenPath();
 
         // Prevent any further execution
         // as it may well try to connect to the database
@@ -156,7 +162,7 @@ class ServiceProvider extends ModuleServiceProvider
         exit(0);
     }
 
-    protected static function createUser(string $login, string $password)
+    protected function createUser(string $login, string $password)
     {
         //$database = 'winter'; // TODO: Get database name!
         $login    = str_replace("'", "\\'", $login);
@@ -169,7 +175,7 @@ class ServiceProvider extends ModuleServiceProvider
         DB::unprepared($sql);
     }
 
-    protected static function loginScreenPath()
+    protected function loginScreenPath()
     {
         // TODO: publish this resource to app
         $dir     = dirname(__FILE__);
