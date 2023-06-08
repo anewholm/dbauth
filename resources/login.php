@@ -53,7 +53,7 @@
                 <div class="layout-row">
                     <div class="layout-cell">
                         <div class="outer-form-container">
-                            <?= Form::open() ?>
+                            <?= Form::open(['url' => '/backend/backend/auth/signin']) ?>
                                 <input type="hidden" name="postback" value="1" />
 
                                 <div class="form-elements" role="form">

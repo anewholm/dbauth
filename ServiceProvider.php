@@ -191,33 +191,41 @@ class ServiceProvider extends ModuleServiceProvider
         return ($key ? $config[$key] : $config);
     }
 
+    protected static function escapeSQLName(string $name, ?string $quote = '"'): string
+    {
+        $name  = preg_replace("/(['\"])/", '\\\$1', $name);
+        return "$quote$name$quote"; 
+    }
+
     protected static function checkCreateTokenDBUser(string $login, string $password): bool
     {
         $created  = FALSE;
-        $database = self::configDatabase('database');
-        $login    = preg_replace("/(['\"])/", '\\\$1', $login);
-        $password = preg_replace("/(['\"])/", '\\\$1', $password);
+        $databaseName   = self::escapeSQLName(self::configDatabase('database'));
+        $loginName      = self::escapeSQLName($login);
+        $passwordString = self::escapeSQLName($password, "'");
+        $loginString    = self::escapeSQLName($login,    "'");
 
         // Check for existence (PostGreSQL specific)
-        $userExists = DB::select("SELECT 1 FROM pg_roles WHERE rolname='$login';");
+        $userExists = DB::select("SELECT 1 FROM pg_roles WHERE rolname=$loginString;");
         if ($userExists) {
-            // TODO: Update the password
-            // Delete
-            if (FALSE) {
-                DB::unprepared("REVOKE ALL ON ALL TABLES IN schema public from \"$login\";");
-                DB::unprepared("REVOKE ALL ON schema public from \"$login\";");
-                DB::unprepared("REVOKE ALL ON database \"$database\" from \"$login\";");
-                DB::unprepared("REASSIGN OWNED BY \"$login\" TO postgres;");
-                DB::unprepared("DROP USER if exists \"$login\";");
-            }
+            // Update the password
+            DB::unprepared("ALTER ROLE $loginName WITH PASSWORD $passwordString;");
+            // Delete Completely
+            /*
+            DB::unprepared("REVOKE ALL ON ALL TABLES IN schema public from $loginName;");
+            DB::unprepared("REVOKE ALL ON schema public from $loginName;");
+            DB::unprepared("REVOKE ALL ON database $databaseName from $loginName;");
+            DB::unprepared("REASSIGN OWNED BY $loginName TO postgres;");
+            DB::unprepared("DROP USER if exists $loginName;");
+            */
         } else {
             // Create
             // TODO: Make RLS / table access configurable
             try {
-                DB::unprepared("CREATE USER \"$login\" with password '$password';");
-                DB::unprepared("GRANT ALL ON DATABASE \"$database\" TO \"$login\";");
-                DB::unprepared("GRANT ALL ON SCHEMA public TO \"$login\";");
-                DB::unprepared("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO \"$login\";");
+                DB::unprepared("CREATE USER $loginName with password $passwordString;");
+                DB::unprepared("GRANT ALL ON DATABASE $databaseName TO $loginName;");
+                DB::unprepared("GRANT ALL ON SCHEMA public TO $loginName;");
+                DB::unprepared("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $loginName;");
                 $created = TRUE;
             } catch (QueryException $ex) {
                 Flash::error($ex->getMessage());
