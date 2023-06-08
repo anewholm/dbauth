@@ -100,9 +100,9 @@
 
                         <!-- Flash Messages -->
                         <div id="layout-flash-messages">
-                            <?php if ($ex): ?>
+                            <?php if ($exceptionMessage): ?>
                                 <p class="flash-message fade error" data-interval="5">
-                                    <?= substr(preg_replace('#/var/www/.*|[(]?SQL:.*#', '', $ex->getMessage()), 0, 500); ?>.
+                                    <?= substr(preg_replace('#/var/www/.*|[(]?SQL:.*#', '', $exceptionMessage), 0, 500); ?>.
                                     <button type="button" class="close" aria-hidden="true">×</button>
                                 </p>
                             <?php endif ?>            

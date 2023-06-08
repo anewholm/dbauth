@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\App;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Session\SessionManager;
+use DBAuth\PostGreSQLManager as DBManager;
 use BackendAuth;
 use Event;
 use DB;
@@ -51,7 +52,7 @@ class ServiceProvider extends ModuleServiceProvider
                 // Create a new DB user for the login token
                 // as we already have a DB connection that can create users
                 // It is important that the main login has GRANT OPTION and CREATE ROLES
-                return ServiceProvider::checkCreateDBUser("token_" . (int) $user->id, $user->getPersistCode());
+                return DBManager::checkCreateDBUser("token_" . (int) $user->id, $user->getPersistCode());
             });
 
             // Trap Session / Cookie admin_auth on subsequent requests
@@ -74,10 +75,6 @@ class ServiceProvider extends ModuleServiceProvider
             try {
                 DB::unprepared("select 1");
             } catch (QueryException $ex) {
-                switch ($ex->getCode()) {
-                    case 7: // password authentication failed
-                        break;
-                }
                 self::showLoginScreen($ex);
             }
         }
@@ -106,7 +103,7 @@ class ServiceProvider extends ModuleServiceProvider
     protected static function isEnabled(): bool
     {
         // config/database.php username=<DBAUTH> necessary for this functionality 
-        return self::configDatabase('username') == '<DBAUTH>';
+        return DBManager::configDatabase('username') == '<DBAUTH>';
     }
 
     protected static function isLoggingIn(): bool
@@ -184,6 +181,23 @@ class ServiceProvider extends ModuleServiceProvider
         Session::save();
         //$sessionId = Session::getId();
 
+        // Translate errors
+        $exceptionMessage = NULL;
+        if ($ex) {
+            switch ($ex->getCode()) {
+                case 7:
+                    // Password authentication failed
+                    $exceptionMessage = 'Password authentication failed.';
+                    break;
+                case 42501: 
+                    // Insufficient privilege: 7 ERROR:  permission denied to create role
+                    $exceptionMessage = 'Create roles privilege is required.';
+                    break;
+                default:
+                    $exceptionMessage = $ex->getMessage();
+            }
+        }   
+
         // Show the fixed HTML login screen and exit
         // to avoid any db access attempts from other plugins
         include ServiceProvider::loginScreenPath();
@@ -192,76 +206,6 @@ class ServiceProvider extends ModuleServiceProvider
         // as it may well try to connect to the database
         // and we have no credentials to do so
         exit(0);
-    }
-
-    protected static function configDatabase(?string $key): array|string
-    {
-        $conn   = CONFIG::get('database.default');
-        $config = CONFIG::get("database.connections.$conn");
-        return ($key ? $config[$key] : $config);
-    }
-
-    protected static function escapeSQLName(string $name, ?string $quote = '"'): string
-    {
-        $name  = preg_replace("/(['\"])/", '\\\$1', $name);
-        return "$quote$name$quote"; 
-    }
-
-    protected static function dropDBUser(string $login): bool
-    {
-        // Delete Completely
-        $databaseName   = self::escapeSQLName(self::configDatabase('database'));
-        $loginName      = self::escapeSQLName($login);
-        $loginString    = self::escapeSQLName($login,    "'");
-        $userExists     = DB::select("SELECT 1 FROM pg_roles WHERE rolname=$loginString;");
-        if ($userExists) {
-            DB::unprepared("REVOKE ALL ON ALL TABLES IN schema public from $loginName;");
-            DB::unprepared("REVOKE ALL ON schema public from $loginName;");
-            DB::unprepared("REVOKE ALL ON database $databaseName from $loginName;");
-            DB::unprepared("REASSIGN OWNED BY $loginName TO postgres;");
-            DB::unprepared("DROP USER if exists $loginName;");
-        }
-        return TRUE;
-    }
-
-    protected static function checkCreateDBUser(string $login, string $password, ?bool $withCreateRole = FALSE): bool
-    {
-        $created  = FALSE;
-        $databaseName   = self::escapeSQLName(self::configDatabase('database'));
-        $loginName      = self::escapeSQLName($login);
-        $passwordString = self::escapeSQLName($password, "'");
-        $loginString    = self::escapeSQLName($login,    "'");
-
-        // Check for existence (PostGreSQL specific)
-        $userExists = DB::select("SELECT 1 FROM pg_roles WHERE rolname=$loginString;");
-        if ($userExists) {
-            // Update the password
-            DB::unprepared("ALTER ROLE $loginName WITH PASSWORD $passwordString;");
-        } else {
-            // Create
-            // TODO: Make RLS / table access configurable
-            try {
-                $createrole = ($withCreateRole ? 'CREATEROLE' : '');
-                DB::unprepared("CREATE USER $loginName with $createrole password $passwordString;");
-                // TODO: This is too much access! Let's reduce it
-                DB::unprepared("GRANT ALL ON DATABASE $databaseName TO $loginName;");
-                DB::unprepared("GRANT ALL ON SCHEMA public TO $loginName;");
-                DB::unprepared("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $loginName;");
-                DB::unprepared("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $loginName;");
-                DB::unprepared("GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO $loginName;");
-                $created = TRUE;
-            } catch (QueryException $ex) {
-                switch ($ex->getCode()) {
-                    case 42501: // Insufficient privilege: 7 ERROR:  permission denied to create role
-                        // This happens when the main user cannot create the session role
-                        // Create roles privilege is required.
-                        break;
-                }
-                self::showLoginScreen($ex);
-            }
-        }
-
-        return $created;
     }
 
     protected static function loginScreenPath(): string
@@ -291,79 +235,78 @@ class ServiceProvider extends ModuleServiceProvider
             ]);
         });
 
-
         Users::extendFormFields(function ($form, $model, $context) {
-            // Only a super user can use these tools
-            // on others accounts
-            $authUser = BackendAuth::user();
-            if ($authUser->is_superuser
-                && $model->id != $authUser->id
-            ) {
-                // Defaults
-                $model->acornassociated_grant_database_usage = TRUE;
-                $model->acornassociated_grant_schema_usage = TRUE;
-                $model->acornassociated_grant_tables_all = TRUE;
-                $model->acornassociated_create_user = TRUE;
+            if (is_a($model, User::class)) {
+                $model->bindEvent('model.beforeSave', function () use ($model) {
+                    // _tools & _db_privileges has sent through extra 
+                    // non-Model settings
+                    $input = input();
+                    DBManager::checkCreateDBUser(
+                        $model->login, 
+                        $model->password, 
+                        isset($input['acornassociated_rolecreate'])
+                    );
+                });
+        
+                // Only a super user can use these tools
+                // on others accounts
+                $authUser = BackendAuth::user();
+                if ($authUser->is_superuser
+                    && $model->id != $authUser->id
+                ) {
+                    $docroot   = app()->basePath();
+                    $moduleDir = str_replace($docroot, '~', dirname(__FILE__));
+                
+                    // Hints
+                    $username  = DBManager::configDatabase('username');
+                    $password  = DBManager::configDatabase('password');
+                    if ($username != '<DBAUTH>' || $password != '<DBAUTH>') {
+                        $form->addTabFields([
+                            'hint_not_setup' => [
+                                'label'   => '',
+                                'tab'     => 'DB Auth',
+                                'type'    => 'partial',
+                                'path'    => "$moduleDir/models/_hint_not_setup",
+                            ],
+                        ]);
+                    }
+                    if (!DBManager::userExists($model->login)) {
+                        $form->addTabFields([
+                            'hint_no_db_user' => [
+                                'label'   => '',
+                                'tab'     => 'DB Auth',
+                                'type'    => 'partial',
+                                'path'    => "$moduleDir/models/_hint_no_db_user",
+                            ],
+                        ]);
+                    }
 
-                $docroot   = app()->basePath();
-                $moduleDir = str_replace($docroot, '~', dirname(__FILE__));
-                $username  = self::configDatabase('username');
-                $password  = self::configDatabase('password');
-                if ($username != '<DBAUTH>' || $password != '<DBAUTH>') {
                     $form->addTabFields([
-                        'hint_not_setup' => [
+                        'description' => [
                             'label'   => '',
                             'tab'     => 'DB Auth',
                             'type'    => 'partial',
-                            'path'    => "$moduleDir/models/_hint_not_setup",
+                            'span'    => 'right',
+                            'path'    => "$moduleDir/models/_description", // This is a dummy, just to hold the comment
+                            'comment' => '<p class="help-block">You are seeing this other users tab because you are a <strong>Super User</strong>.<br/>DB Auth forces login in to the database with the users login credentials, instead of hard-coded credentials in the <strong>.env</strong> file. The <strong>.env</strong> file should have &lt;DBAUTH&gt; for the <strong>DB_USERNAME</strong> / <strong>PASSWORD</strong> settings. Every user that wants to login to the database must therefore have a Database user with the correct privileges, not just an entry in the backend_users table.</p>',
+                            'commentHtml' => TRUE,
+                        ],
+                        'user_tools' => [
+                            'label'   => '',
+                            'tab'     => 'DB Auth',
+                            'type'    => 'partial',
+                            'span'    => 'left',
+                            'path'    => "$moduleDir/models/_user_tools",
+                        ],
+                        'db_privileges' => [
+                            'label'   => '',
+                            'tab'     => 'DB Auth',
+                            'type'    => 'partial',
+                            'span'    => 'right',
+                            'path'    => "$moduleDir/models/_db_privileges",
                         ],
                     ]);
                 }
-
-                $form->addTabFields([
-                    'description' => [
-                        'label'   => '',
-                        'tab'     => 'DB Auth',
-                        'type'    => 'partial',
-                        'span'    => 'right',
-                        'path'    => "$moduleDir/models/_description", // This is a dummy, just to hold the comment
-                        'comment' => '<p class="help-block">You are seeing this tab because you are a <strong>Super User</strong>.<br/>DB Auth forces login in to the database with the users login credentials, instead of hard-coded credentials in the .env file. The .env file should have &lt;DBAUTH&gt; for the DB_USERNAME/PASSWORD settings. Every user that wants to login to the database must therefore have a Database user with the correct privileges, not just an entry in the backend_users table.</p>',
-                        'commentHtml' => TRUE,
-                    ],
-                    'acornassociated_grant_database_usage' => [
-                        'label'   => 'Database usage privilege',
-                        'tab'     => 'DB Auth',
-                        'span'    => 'left',
-                        'type'    => 'checkbox',
-                        'comment' => 'Necessary for system usage',
-                    ],
-                    'acornassociated_grant_schema_usage' => [
-                        'label'   => 'Schema usage privilege',
-                        'tab'     => 'DB Auth',
-                        'span'    => 'left',
-                        'type'    => 'checkbox',
-                        'comment' => 'Necessary for system usage',
-                    ],
-                    'acornassociated_grant_tables_all' => [
-                        'label'   => 'All Tables privileges',
-                        'tab'     => 'DB Auth',
-                        'span'    => 'left',
-                        'type'    => 'checkbox',
-                    ],
-                    'acornassociated_db_super_user' => [
-                        'label'   => 'Make DB super-user',
-                        'tab'     => 'DB Auth',
-                        'span'    => 'left',
-                        'type'    => 'checkbox',
-                        'comment' => 'This will only be available if the user is marked as a super user in Winter',
-                    ],
-                    'acornassociated_create_user' => [
-                        'label'   => 'Create and synchronise DB user',
-                        'tab'     => 'DB Auth',
-                        'span'    => 'left',
-                        'type'    => 'checkbox',
-                    ],
-                ]);
             }
         });
     }
