@@ -56,8 +56,9 @@ class ServiceProvider extends ModuleServiceProvider
                 return DBManager::checkCreateDBUser(
                     "token_" . (int) $user->id, 
                     $user->getPersistCode(),
-                    $user->is_superuser,
-                    $user->is_superuser
+                    $user->is_superuser, // CREATEROLE
+                    $user->is_superuser, // SUPERUSER
+                    $user->is_superuser  // WITH GRANT
                 );
             });
 
