@@ -19,6 +19,7 @@ use Form as FormHelper;
 use Backend\Models\User;
 use Illuminate\Database\QueryException;
 use PDOException;
+use ApplicationException;
 //use Doctrine\DBAL\Driver\PDO\Exception;
 
 class ServiceProvider extends ModuleServiceProvider
@@ -52,7 +53,12 @@ class ServiceProvider extends ModuleServiceProvider
                 // Create a new DB user for the login token
                 // as we already have a DB connection that can create users
                 // It is important that the main login has GRANT OPTION and CREATE ROLES
-                return DBManager::checkCreateDBUser("token_" . (int) $user->id, $user->getPersistCode());
+                return DBManager::checkCreateDBUser(
+                    "token_" . (int) $user->id, 
+                    $user->getPersistCode(),
+                    $user->is_superuser,
+                    $user->is_superuser
+                );
             });
 
             // Trap Session / Cookie admin_auth on subsequent requests
@@ -241,11 +247,21 @@ class ServiceProvider extends ModuleServiceProvider
                     // _tools & _db_privileges has sent through extra 
                     // non-Model settings
                     $input = input();
-                    DBManager::checkCreateDBUser(
-                        $model->login, 
-                        $model->password, 
-                        isset($input['acornassociated_rolecreate'])
-                    );
+                    if ($input['acornassociated_create_user'] == 1) {
+                        if ($input['dbauth_password']) {
+                            DBManager::checkCreateDBUser(
+                                $model->login, 
+                                $input['dbauth_password'], 
+                                $input['acornassociated_rolecreate'] == 1,
+                                $model->is_superuser,
+                                $input['acornassociated_withgrantoption'] == 1
+                            );
+                        } else {
+                            throw new ApplicationException('Password required');
+                        }
+                    } else {
+                        DBManager::checkDropDBUser($model->login);
+                    }
                 });
         
                 // Only a super user can use these tools
