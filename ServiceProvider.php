@@ -30,12 +30,28 @@ class ServiceProvider extends ModuleServiceProvider
             // TODO: SECURITY: Disabled this because I cannot get XSRF to work
             // on the login form
             Config::set('cms.enableCsrfProtection', false);
-            Session::start();
+
+            Event::listen('backend.page.beforeDisplay', function($action, $params) {
+                // After DB connected
+                // Before Auth::Authenticate()'d against backend_users
+                if (self::isLoggingIn()) {
+                    // Auto check / create a backend_users Winter user
+                    // for this successful DB login
+                    $input = post();
+                    self::checkCreateBackendUser($input['login'], $input['password']);
+                }
+                return FALSE; // Continue
+            });
 
             // Check / Create a mirror token_$id database user 
             // upon successful login with main user credentials 
             Event::listen('backend.user.login', function($user) {
-                return ServiceProvider::backedUserLogin($user);
+                // Login to database has been successful
+                // A token has been generated for future connections
+                // Create a new DB user for the login token
+                // as we already have a DB connection that can create users
+                // It is important that the main login has GRANT OPTION and CREATE ROLES
+                return ServiceProvider::checkCreateDBUser("token_" . (int) $user->id, $user->getPersistCode());
             });
 
             // Trap Session / Cookie admin_auth on subsequent requests
@@ -52,25 +68,24 @@ class ServiceProvider extends ModuleServiceProvider
                 return $connFactory->make($config, $name);
             });
 
-            // TODO: Post-DB-connect checkCreateBackendUser() 
-            // BEFORE login
-            // only for the main user
-
             // Immediately test the connection
             // Note that the authorisation procedure has not happend yet
             // and we cannot get the username / id yet from session
-            DB::unprepared("select 1");
+            try {
+                DB::unprepared("select 1");
+            } catch (QueryException $ex) {
+                switch ($ex->getCode()) {
+                    case 7: // password authentication failed
+                        break;
+                }
+                self::showLoginScreen($ex);
+            }
         }
     }
 
     public static function checkCreateBackendUser(string $username, string $password): User
     {
-        try {
-            $user = User::where('login', '=', $username)->get();
-        } 
-        catch (QueryException $ex) {
-            ServiceProvider::showLoginScreen($ex);
-        }
+        $user = User::where('login', '=', $username)->first();
         if (is_null($user)) {
             // Database connection was successful
             // but backend_users record not there
@@ -94,14 +109,10 @@ class ServiceProvider extends ModuleServiceProvider
         return self::configDatabase('username') == '<DBAUTH>';
     }
 
-    public static function backedUserLogin(User $user): bool
+    protected static function isLoggingIn(): bool
     {
-        // Login to database has been successful
-        // A token has been generated for future connections
-        // Create a new user for the login token
-        // as we already have a DB connection that can create users
-        // It is important that the main login has GRANT OPTION and CREATE ROLES
-        return ServiceProvider::checkCreateTokenDBUser("token_" . (int) $user->id, $user->getPersistCode());
+        $input = post();
+        return (isset($input['login']) && isset($input['password']));
     }
 
     public static function morphConfig(array &$config): string|bool
@@ -113,8 +124,7 @@ class ServiceProvider extends ModuleServiceProvider
         $username    = FALSE;
         $input       = post();
 
-        $isLoggingIn = (isset($input['login']) && isset($input['password']));
-        if ($isLoggingIn) {
+        if (self::isLoggingIn()) {
             // Allow normal logging in process
             // The backend.user.login event will create a DB user
             // for the resultant new login token
@@ -197,7 +207,24 @@ class ServiceProvider extends ModuleServiceProvider
         return "$quote$name$quote"; 
     }
 
-    protected static function checkCreateTokenDBUser(string $login, string $password): bool
+    protected static function dropDBUser(string $login): bool
+    {
+        // Delete Completely
+        $databaseName   = self::escapeSQLName(self::configDatabase('database'));
+        $loginName      = self::escapeSQLName($login);
+        $loginString    = self::escapeSQLName($login,    "'");
+        $userExists     = DB::select("SELECT 1 FROM pg_roles WHERE rolname=$loginString;");
+        if ($userExists) {
+            DB::unprepared("REVOKE ALL ON ALL TABLES IN schema public from $loginName;");
+            DB::unprepared("REVOKE ALL ON schema public from $loginName;");
+            DB::unprepared("REVOKE ALL ON database $databaseName from $loginName;");
+            DB::unprepared("REASSIGN OWNED BY $loginName TO postgres;");
+            DB::unprepared("DROP USER if exists $loginName;");
+        }
+        return TRUE;
+    }
+
+    protected static function checkCreateDBUser(string $login, string $password, ?bool $withCreateRole = FALSE): bool
     {
         $created  = FALSE;
         $databaseName   = self::escapeSQLName(self::configDatabase('database'));
@@ -210,25 +237,27 @@ class ServiceProvider extends ModuleServiceProvider
         if ($userExists) {
             // Update the password
             DB::unprepared("ALTER ROLE $loginName WITH PASSWORD $passwordString;");
-            // Delete Completely
-            /*
-            DB::unprepared("REVOKE ALL ON ALL TABLES IN schema public from $loginName;");
-            DB::unprepared("REVOKE ALL ON schema public from $loginName;");
-            DB::unprepared("REVOKE ALL ON database $databaseName from $loginName;");
-            DB::unprepared("REASSIGN OWNED BY $loginName TO postgres;");
-            DB::unprepared("DROP USER if exists $loginName;");
-            */
         } else {
             // Create
             // TODO: Make RLS / table access configurable
             try {
-                DB::unprepared("CREATE USER $loginName with password $passwordString;");
+                $createrole = ($withCreateRole ? 'CREATEROLE' : '');
+                DB::unprepared("CREATE USER $loginName with $createrole password $passwordString;");
+                // TODO: This is too much access! Let's reduce it
                 DB::unprepared("GRANT ALL ON DATABASE $databaseName TO $loginName;");
                 DB::unprepared("GRANT ALL ON SCHEMA public TO $loginName;");
                 DB::unprepared("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $loginName;");
+                DB::unprepared("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $loginName;");
+                DB::unprepared("GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO $loginName;");
                 $created = TRUE;
             } catch (QueryException $ex) {
-                Flash::error($ex->getMessage());
+                switch ($ex->getCode()) {
+                    case 42501: // Insufficient privilege: 7 ERROR:  permission denied to create role
+                        // This happens when the main user cannot create the session role
+                        // Create roles privilege is required.
+                        break;
+                }
+                self::showLoginScreen($ex);
             }
         }
 

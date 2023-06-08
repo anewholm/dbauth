@@ -81,7 +81,7 @@
 
                                         <!-- Submit Login -->
                                         <button type="submit" class="btn btn-primary login-button">
-                                            Login To Database
+                                            Login
                                         </button>
                                     </div>
 
@@ -90,7 +90,8 @@
                                         <!-- Forgot your password? -->
                                         <a name="/backend/backend/auth/restore" class="text-muted">
                                             Forgot your password?<br/>
-                                            Please talk with a Systems Administrator.
+                                            Go suck an egg. 
+                                            <!-- Please talk with a Systems Administrator. -->
                                         </a>
                                     </p>
                                 </div>
