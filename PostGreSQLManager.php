@@ -23,10 +23,18 @@ class PostGreSQLManager {
         return (bool) DB::select("SELECT 1 FROM pg_roles WHERE rolname=$loginString;");
     }
 
+    public static function hasOption(array $options, string $name, $default = NULL)
+    {
+        if (substr($name, 0, 16) != 'acornassociated_')
+            $name = "acornassociated_$name";
+        return (isset($options[$name]) && $options[$name] ? $options[$name] : $default);
+    }
+
     public static function checkDropDBUser(string $login): bool
     {
         // Delete Completely
-        $databaseName   = self::escapeSQLName(self::configDatabase('database'));
+        $database       = self::configDatabase('database');
+        $databaseName   = self::escapeSQLName($database);
         $loginName      = self::escapeSQLName($login);
         $loginString    = self::escapeSQLName($login, "'");
         $userExists     = self::userExists($login);
@@ -35,45 +43,40 @@ class PostGreSQLManager {
             DB::unprepared("REVOKE ALL ON ALL SEQUENCES IN schema public from $loginName;");
             DB::unprepared("REVOKE ALL ON ALL FUNCTIONS IN schema public from $loginName;");
             DB::unprepared("REVOKE ALL ON schema public from $loginName;");
-            DB::unprepared("REVOKE ALL ON database $databaseName from $loginName;");
+            if ($database) DB::unprepared("REVOKE ALL ON database $databaseName from $loginName;");
             DB::unprepared("REASSIGN OWNED BY $loginName TO postgres;");
             DB::unprepared("DROP USER if exists $loginName;");
         }
         return $userExists;
     }
 
-    public static function checkCreateDBUser(string $login, string $password, ?bool $withCreateRole = FALSE, ?bool $asSuperUser = FALSE, ?bool $withGrantOption = FALSE): bool
+    public static function checkCreateDBUser(string $login, string $password, ?bool $withCreateRole = FALSE, ?bool $asSuperUser = FALSE, ?bool $withGrantOption = FALSE, ?array $options): bool
     {
-        $created  = FALSE;
-        $databaseName   = self::escapeSQLName(self::configDatabase('database'));
+        $database       = self::configDatabase('database');
+        $databaseName   = self::escapeSQLName($database);
         $loginName      = self::escapeSQLName($login);
         $passwordString = self::escapeSQLName($password, "'");
         $loginString    = self::escapeSQLName($login,    "'");
+        $createrole     = ($withCreateRole ? 'CREATEROLE' : '');
+        $superuser      = ($asSuperUser    ? 'SUPERUSER'  : '');
 
-        // Check for existence (PostGreSQL specific)
-        if (self::userExists($login)) {
-            // Update the password
-            DB::unprepared("ALTER ROLE $loginName WITH PASSWORD $passwordString;");
-        } else {
-            // Create
-            // TODO: Make RLS / table access configurable
-            try {
-                $createrole = ($withCreateRole  ? 'CREATEROLE'        : '');
-                $superuser  = ($asSuperUser     ? 'SUPERUSER'         : '');
-                $withgrant  = ($withGrantOption ? 'WITH GRANT OPTION' : '');
-                DB::unprepared("CREATE USER $loginName with $createrole $superuser password $passwordString;");
-                // TODO: This is too much access! Let's reduce it
-                DB::unprepared("GRANT ALL ON DATABASE $databaseName TO $loginName $withgrant;");
-                DB::unprepared("GRANT ALL ON SCHEMA public TO $loginName $withgrant;");
-                DB::unprepared("GRANT ALL PRIVILEGES ON ALL TABLES    IN SCHEMA public TO $loginName $withgrant;");
-                DB::unprepared("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $loginName $withgrant;");
-                DB::unprepared("GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO $loginName $withgrant;");
-                $created = TRUE;
-            } catch (QueryException $ex) {
-                self::showLoginScreen($ex);
-            }
-        }
+        $exists  = self::userExists($login);
+        $command = ($exists ? 'ALTER' : 'CREATE'); 
+        DB::unprepared("$command USER $loginName WITH $createrole $superuser PASSWORD $passwordString;");
 
-        return $created;
+        // TODO: This is too much access! Let's reduce it
+        $withgrant = ($withGrantOption ? 'WITH GRANT OPTION' : '');
+        if (self::hasOption($options, 'grant_database_usage') && $database) 
+            DB::unprepared("GRANT ALL ON DATABASE $databaseName TO $loginName $withgrant;");
+        if (self::hasOption($options, 'grant_schema_usage')) 
+            DB::unprepared("GRANT ALL ON SCHEMA public TO $loginName $withgrant;");
+        if (self::hasOption($options, 'grant_tables_all')) 
+            DB::unprepared("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $loginName $withgrant;");
+        if (self::hasOption($options, 'grant_sequences_all')) 
+            DB::unprepared("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $loginName $withgrant;");
+        if (self::hasOption($options, 'grant_functions_all')) 
+            DB::unprepared("GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO $loginName $withgrant;");
+
+        return !$exists;
     }
 }

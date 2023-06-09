@@ -53,13 +53,19 @@ class ServiceProvider extends ModuleServiceProvider
                 // Create a new DB user for the login token
                 // as we already have a DB connection that can create users
                 // It is important that the main login has GRANT OPTION and CREATE ROLES
-                return DBManager::checkCreateDBUser(
-                    "token_" . (int) $user->id, 
-                    $user->getPersistCode(),
-                    $user->is_superuser, // CREATEROLE
-                    $user->is_superuser, // SUPERUSER
-                    $user->is_superuser  // WITH GRANT
-                );
+                try {
+                    $created = DBManager::checkCreateDBUser(
+                        "token_" . (int) $user->id, 
+                        $user->getPersistCode(),
+                        $user->is_superuser, // CREATEROLE
+                        $user->is_superuser, // SUPERUSER
+                        $user->is_superuser  // WITH GRANT
+                    );
+                } catch (QueryException $ex) {
+                    self::showLoginScreen($ex);
+                }
+    
+                return $created;
             });
 
             // Trap Session / Cookie admin_auth on subsequent requests
@@ -247,16 +253,26 @@ class ServiceProvider extends ModuleServiceProvider
                 $model->bindEvent('model.beforeSave', function () use ($model) {
                     // _tools & _db_privileges has sent through extra 
                     // non-Model settings
-                    $input = input();
+                    $input    = input();
+                    $password = ($input['dbauth_password'] 
+                        ? $input['dbauth_password'] 
+                        : $input['User']['password'] // Normal password entry during create
+                    );
+
                     if ($input['acornassociated_create_user'] == 1) {
-                        if ($input['dbauth_password']) {
-                            DBManager::checkCreateDBUser(
-                                $model->login, 
-                                $input['dbauth_password'], 
-                                $input['acornassociated_rolecreate'] == 1,
-                                $model->is_superuser,
-                                $input['acornassociated_withgrantoption'] == 1
-                            );
+                        if ($password) {
+                            try {
+                                DBManager::checkCreateDBUser(
+                                    $model->login, 
+                                    $password, 
+                                    $input['acornassociated_rolecreate'] == 1,
+                                    $model->is_superuser,
+                                    $input['acornassociated_withgrantoption'] == 1,
+                                    $input
+                                );
+                            } catch (QueryException $ex) {
+                                throw new ApplicationException($ex->getMessage());
+                            }
                         } else {
                             throw new ApplicationException('Password required');
                         }
@@ -287,7 +303,7 @@ class ServiceProvider extends ModuleServiceProvider
                             ],
                         ]);
                     }
-                    if (!DBManager::userExists($model->login)) {
+                    if ($model->exists && !DBManager::userExists($model->login)) {
                         $form->addTabFields([
                             'hint_no_db_user' => [
                                 'label'   => '',
