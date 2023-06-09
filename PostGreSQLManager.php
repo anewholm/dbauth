@@ -32,6 +32,23 @@ class PostGreSQLManager {
         return ($all || $specific);
     }
 
+    public static function revokeAllPrivileges(string $login): bool
+    {
+        $database       = self::configDatabase('database');
+        $databaseName   = self::escapeSQLName($database);
+        $loginName      = self::escapeSQLName($login);
+        $userExists     = self::userExists($login);
+        if ($userExists) {
+            DB::unprepared("REVOKE ALL ON ALL FUNCTIONS IN schema public from $loginName CASCADE;");
+            DB::unprepared("REVOKE ALL ON ALL SEQUENCES IN schema public from $loginName CASCADE;");
+            DB::unprepared("REVOKE ALL ON ALL TABLES IN schema public from $loginName CASCADE;");
+            DB::unprepared("REVOKE ALL ON schema public from $loginName CASCADE;");
+            if ($database) DB::unprepared("REVOKE ALL ON database $databaseName from $loginName CASCADE;");
+            DB::unprepared("REASSIGN OWNED BY $loginName TO postgres;");
+        }
+        return $userExists;
+    }
+
     public static function checkDropDBUser(string $login): bool
     {
         // Delete DB User Completely
@@ -41,12 +58,7 @@ class PostGreSQLManager {
         $loginString    = self::escapeSQLName($login, "'");
         $userExists     = self::userExists($login);
         if ($userExists) {
-            DB::unprepared("REVOKE ALL ON ALL TABLES IN schema public from $loginName;");
-            DB::unprepared("REVOKE ALL ON ALL SEQUENCES IN schema public from $loginName;");
-            DB::unprepared("REVOKE ALL ON ALL FUNCTIONS IN schema public from $loginName;");
-            DB::unprepared("REVOKE ALL ON schema public from $loginName;");
-            if ($database) DB::unprepared("REVOKE ALL ON database $databaseName from $loginName;");
-            DB::unprepared("REASSIGN OWNED BY $loginName TO postgres;");
+            self::revokeAllPrivileges($login);
             DB::unprepared("DROP USER if exists $loginName;");
         }
         return $userExists;

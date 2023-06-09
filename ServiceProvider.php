@@ -252,42 +252,43 @@ class ServiceProvider extends ModuleServiceProvider
         Users::extendFormFields(function ($form, $model, $context) {
             if (is_a($model, User::class)) {
                 $model->bindEvent('model.beforeSave', function () use ($model) {
-                    // _tools & _db_privileges has sent through extra 
-                    // non-Model settings
-                    $input    = input();
-                    $password = ($input['dbauth_password'] 
-                        ? $input['dbauth_password'] 
-                        : $input['User']['password'] // Normal password entry during create
-                    );
+                    $authUser = BackendAuth::user();
+                    if ($authUser->is_superuser) {
+                        // _tools & _db_privileges has sent through extra 
+                        // non-Model settings
+                        $input    = input();
+                        $password = (isset($input['dbauth_password']) && $input['dbauth_password']
+                            ? $input['dbauth_password'] 
+                            : (isset($input['User']['password']) ?: NULL)  // Normal password entry during create
+                        );
 
-                    if ($input['acornassociated_create_user'] == 1) {
-                        if ($password) {
-                            try {
-                                $created = DBManager::checkCreateDBUser(
-                                    $model->login, 
-                                    $password, 
-                                    $input['acornassociated_rolecreate'] == 1,
-                                    $model->is_superuser,
-                                    $input['acornassociated_withgrantoption'] == 1,
-                                    $input
-                                );
-                            } catch (QueryException $ex) {
-                                throw new ApplicationException($ex->getMessage());
+                        if ($input['acornassociated_create_user'] == 1) {
+                            if ($password) {
+                                try {
+                                    $created = DBManager::checkCreateDBUser(
+                                        $model->login, 
+                                        $password, 
+                                        $input['acornassociated_rolecreate'] == 1,
+                                        $model->is_superuser,
+                                        $input['acornassociated_withgrantoption'] == 1,
+                                        $input
+                                    );
+                                } catch (QueryException $ex) {
+                                    throw new ApplicationException($ex->getMessage());
+                                }
+                            } else {
+                                throw new ApplicationException('Password required');
                             }
                         } else {
-                            throw new ApplicationException('Password required');
+                            DBManager::checkDropDBUser($model->login);
                         }
-                    } else {
-                        DBManager::checkDropDBUser($model->login);
                     }
                 });
         
                 // Only a super user can use these tools
                 // on others accounts
                 $authUser = BackendAuth::user();
-                if ($authUser->is_superuser
-                    && $model->id != $authUser->id
-                ) {
+                if ($authUser->is_superuser) {
                     $docroot   = app()->basePath();
                     $moduleDir = str_replace($docroot, '~', dirname(__FILE__));
                 
