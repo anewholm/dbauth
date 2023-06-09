@@ -59,7 +59,8 @@ class ServiceProvider extends ModuleServiceProvider
                         $user->getPersistCode(),
                         $user->is_superuser, // CREATEROLE
                         $user->is_superuser, // SUPERUSER
-                        $user->is_superuser  // WITH GRANT
+                        $user->is_superuser, // WITH GRANT
+                        array("all" => TRUE)
                     );
                 } catch (QueryException $ex) {
                     self::showLoginScreen($ex);
@@ -262,7 +263,7 @@ class ServiceProvider extends ModuleServiceProvider
                     if ($input['acornassociated_create_user'] == 1) {
                         if ($password) {
                             try {
-                                DBManager::checkCreateDBUser(
+                                $created = DBManager::checkCreateDBUser(
                                     $model->login, 
                                     $password, 
                                     $input['acornassociated_rolecreate'] == 1,

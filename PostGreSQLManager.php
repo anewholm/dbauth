@@ -27,12 +27,14 @@ class PostGreSQLManager {
     {
         if (substr($name, 0, 16) != 'acornassociated_')
             $name = "acornassociated_$name";
-        return (isset($options[$name]) && $options[$name] ? $options[$name] : $default);
+        $all      = (isset($options['all']) && $options['all']);
+        $specific = (isset($options[$name]) && $options[$name]);
+        return ($all || $specific);
     }
 
     public static function checkDropDBUser(string $login): bool
     {
-        // Delete Completely
+        // Delete DB User Completely
         $database       = self::configDatabase('database');
         $databaseName   = self::escapeSQLName($database);
         $loginName      = self::escapeSQLName($login);
@@ -50,7 +52,7 @@ class PostGreSQLManager {
         return $userExists;
     }
 
-    public static function checkCreateDBUser(string $login, string $password, ?bool $withCreateRole = FALSE, ?bool $asSuperUser = FALSE, ?bool $withGrantOption = FALSE, ?array $options): bool
+    public static function checkCreateDBUser(string $login, string $password, ?bool $withCreateRole = FALSE, ?bool $asSuperUser = FALSE, ?bool $withGrantOption = FALSE, ?array $options = array()): bool
     {
         $database       = self::configDatabase('database');
         $databaseName   = self::escapeSQLName($database);
