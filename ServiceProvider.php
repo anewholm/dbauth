@@ -63,7 +63,7 @@ class ServiceProvider extends ModuleServiceProvider
                         array("all" => TRUE)
                     );
                 } catch (QueryException $ex) {
-                    self::showLoginScreen($ex);
+                    self::showLoginScreen(NULL, $ex);
                 }
     
                 return $created;
@@ -72,11 +72,17 @@ class ServiceProvider extends ModuleServiceProvider
             // Trap Session / Cookie admin_auth on subsequent requests
             // to login with the token_$id user
             app('db')->extend('pgsql', function($config, $name){
-                $username = ServiceProvider::morphConfig($config);
+                $config = ServiceProvider::morphConfig($config);
                 // If neither a login, nor a token
-                // then username will === FALSE, config is still <DBAUTH>
+                // then config will still == <DBAUTH>
                 // so we cannot connect to the database
-                if ($username === FALSE) ServiceProvider::showLoginScreen();
+                if ($config['username'] == '<DBAUTH>') {
+                    // showLoginScreen() may exit()
+                    // However, if this is artisan, it might return a username
+                    $config = ServiceProvider::showLoginScreen($config);
+                    if ($config['username'] == '<DBAUTH>') 
+                        throw new PDOException("No username provided for database connection");
+                }
 
                 // Connect with the Config::* morphed credentials
                 $connFactory = new ConnectionFactory(app());
@@ -89,7 +95,7 @@ class ServiceProvider extends ModuleServiceProvider
             try {
                 DB::unprepared("select 1");
             } catch (QueryException $ex) {
-                self::showLoginScreen($ex);
+                self::showLoginScreen(NULL, $ex);
             }
         }
     }
@@ -126,21 +132,18 @@ class ServiceProvider extends ModuleServiceProvider
         return (isset($input['login']) && isset($input['password']));
     }
 
-    public static function morphConfig(array &$config): string|bool
+    public static function morphConfig(array $config): array
     {
         // Note $config passed by reference
         // Return value of FALSE indicates no changes to config
         // so username may still == <DBAUTH>
         // causing connection failure
-        $username    = FALSE;
-        $input       = post();
-
         if (self::isLoggingIn()) {
             // Allow normal logging in process
             // The backend.user.login event will create a DB user
             // for the resultant new login token
-            $username = $input['login'];
-            $config['username'] = $username;
+            $input = post();
+            $config['username'] = $input['login'];
             $config['password'] = $input['password'];
         } else {
             // Get the users id and auth token
@@ -176,25 +179,26 @@ class ServiceProvider extends ModuleServiceProvider
                 // using the Users actual original login credentials
                 // to create the temporary user
                 [$id, $token] = $authArray;
-                $username = "token_$id";
-                $config['username'] = $username;
+                $config['username'] = "token_$id";
                 $config['password'] = $token;
             }
         }
 
-        return $username;
+        return $config;
     }
 
-    public static function showLoginScreen(?PDOException $ex = NULL)
+    protected static function isCommandLine()
     {
-        // TODO: SECURITY: XSRF protection is disabled above
-        Session::start(); // => loadSession() && regenerateToken();
-        //$cookie = $this->makeXsrfCookie();
-        //setcookie($cookie->getName(), $cookie->getValue());
-        $xsrf = Session::token();
-        Session::save();
-        //$sessionId = Session::getId();
+        return !self::isHTTPCall();
+    }
 
+    protected static function isHTTPCall()
+    {
+        return isset($_SERVER['HTTP_HOST']);
+    }
+
+    public static function showLoginScreen(?array $config = array(), ?PDOException $ex = NULL): array
+    {
         // Translate errors
         $exceptionMessage = NULL;
         if ($ex) {
@@ -212,14 +216,46 @@ class ServiceProvider extends ModuleServiceProvider
             }
         }   
 
-        // Show the fixed HTML login screen and exit
-        // to avoid any db access attempts from other plugins
-        include ServiceProvider::loginScreenPath();
+        if (self::isHTTPCall()) {
+            // TODO: SECURITY: XSRF protection is disabled above
+            Session::start(); // => loadSession() && regenerateToken();
+            //$cookie = $this->makeXsrfCookie();
+            //setcookie($cookie->getName(), $cookie->getValue());
+            $xsrf = Session::token();
+            Session::save();
+            //$sessionId = Session::getId();
 
-        // Prevent any further execution
-        // as it may well try to connect to the database
-        // and we have no credentials to do so
-        exit(0);
+            // Show the fixed HTML login screen and exit
+            // to avoid any db access attempts from other plugins
+            include ServiceProvider::loginScreenPath();
+
+            // Prevent any further execution
+            // as it may well try to connect to the database
+            // and we have no credentials to do so
+            exit(0);
+        } else {
+            // Console line login
+            if ($exceptionMessage) print("\e[1;37;41m$exceptionMessage\e[0m\n");
+
+            $username = NULL;
+            $password = NULL;
+            if (env('ARTISAN_AUTO_LOGIN')) {
+                $username = 'winter';
+                $password = 'QueenPool1@';
+            } else {
+                print("\e[1;37;40mDB Auth is active.\e[0m ");
+                print("So no database connection credentials are available in .env.\n");
+                print("If you set .env \e[1;37;40mARTISAN_AUTO_LOGIN=1\e[0m then artisan will auto-login with winter/QueenPool1@\n");
+                print("\e[32mDatabase username\e[0m [winter]: ");
+                $username = (readline() ?: 'winter');
+                print("\e[32mDatabase password\e[0m [QueenPool1@]: ");
+                $password = (readline() ?: 'QueenPool1@');
+            }
+            $config['username'] = $username;
+            $config['password'] = $password;
+        }
+
+        return $config;
     }
 
     protected static function loginScreenPath(): string
