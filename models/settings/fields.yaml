@@ -1,7 +1,19 @@
 fields:
+    # TODO: Complete the functionality behind DBAuth settings
     auto_create_user:
-        label: Auto Create the backend_users user
-        type: checkbox
+        label: Auto-Create the backend_users record
+        type: switch
         span: left
-        comment: If the login is successful with the PostGreSQL user, then the backend_users record will be automatically created
+        comment: If a login is successful with a PostGreSQL DB user, then the backend_users record will be checked and automatically created if missing allowing the full login to be successful.
         default: 1
+    encrypt_sessions:
+        label: Encrypt sessions
+        type: switch
+        span: left
+        comment: Session keys and transport are SSL encrypted but Session data files, including the temporary database login id and password, are stored in plain text in the session file by default. Turn this on to encrypt session files.
+        default: 1
+    sessions_location:
+        label: Location of session files
+        type: text
+        span: right
+        comment: Change the default location of the session files to better hide them

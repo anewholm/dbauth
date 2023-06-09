@@ -1,10 +1,16 @@
-<div class="form-group checkbox-field span-left" id="Form-field-User-acornassociated_create_user-group">
-    <div class="checkbox custom-checkbox" tabindex="0">
-        <input type="hidden" name="acornassociated_create_user" value="0">
-        <input type="checkbox" id="Form-field-User-acornassociated_create_user" name="acornassociated_create_user" value="1" checked="checked">
+<div class="form-group switch-field span-left" id="Form-field-User-acornassociated_create_user-group">
+    <div class="field-switch">
         <label for="Form-field-User-acornassociated_create_user">Create and synchronise DB user</label>
-        <p class="help-block">This includes password changes. The username cannot be changed anymore.</p>
+        <p class="help-block">This includes password changes.</p>
     </div>
+
+    <input type="hidden" name="acornassociated_create_user" value="0">
+
+    <label class="custom-switch">
+        <input type="checkbox" checked="1" id="Form-field-User-acornassociated_create_user" name="acornassociated_create_user" value="1">
+        <span><span>On</span><span>Off</span></span>
+        <a class="slide-button"></a>
+    </label>
 </div>
 
 <div class="form-group  widget-field span-right" id="Form-field-User-password-group">
