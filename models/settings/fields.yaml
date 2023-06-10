@@ -1,5 +1,15 @@
 fields:
     # TODO: Complete the functionality behind DBAuth settings
+    _hint_dev_setup:
+        label:
+        tab: DB Auth
+        type: partial
+        path: ~/modules/dbauth/models/_hint_dev_setup
+    _hint_not_setup:
+        label:
+        tab: DB Auth
+        type: partial
+        path: ~/modules/dbauth/models/_hint_not_setup
     auto_create_user:
         label: Auto-Create the backend_users record
         type: switch
