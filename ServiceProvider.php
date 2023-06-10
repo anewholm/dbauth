@@ -329,18 +329,22 @@ class ServiceProvider extends ModuleServiceProvider
                     $moduleDir = str_replace($docroot, '~', dirname(__FILE__));
                 
                     // Hints
-                    $username  = DBManager::configDatabase('username');
-                    $password  = DBManager::configDatabase('password');
-                    if ($username != '<DBAUTH>' || $password != '<DBAUTH>') {
-                        $form->addTabFields([
-                            'hint_not_setup' => [
-                                'label'   => '',
-                                'tab'     => 'DB Auth',
-                                'type'    => 'partial',
-                                'path'    => "$moduleDir/models/_hint_not_setup",
-                            ],
-                        ]);
-                    }
+                    // This is a self-policing hint (it decides if it is appropriate)
+                    $form->addTabFields([
+                        'hint_not_setup' => [
+                            'label'   => '',
+                            'tab'     => 'DB Auth',
+                            'type'    => 'partial',
+                            'path'    => "$moduleDir/models/_hint_not_setup",
+                        ],
+                        'hint_dev_setup' => [
+                            'label'   => '',
+                            'tab'     => 'DB Auth',
+                            'type'    => 'partial',
+                            'path'    => "$moduleDir/models/_hint_dev_setup",
+                        ],
+                    ]);
+
                     if ($model->exists && !DBManager::userExists($model->login)) {
                         $form->addTabFields([
                             'hint_no_db_user' => [
