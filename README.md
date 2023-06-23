@@ -11,3 +11,13 @@ Set the database username and password in `config/database.app` to "&lt;DBAUTH&g
 
 ## Login screen
 DBAuth presents its own static HTML login screen because it needs to ensure that no attempts are made to access the database before login is successful. Laravels normal bootstrap and login screen process is likely to try and connect to the database. However, before DBAuth login, the database cannot be accessed. You can author your own version of the login screen by writing the `~/public/resources/login.html`.
+
+![Login Screen](login.png "login screen")
+
+## Artisan
+Artisan also needs to connect to the database. It will attempt a standard development database login which is wise to use in development situations, and then ask if connection fails.
+
+## Granting other users access
+When a superuser creates a new user with Winter CMS, DBAuth will create a new PostGreSQL database user as well. This situation can be managed in the DBAuth account tab by super users.
+
+![DBAuth setup for an account](setup.png "DBAuth setup for an account")
