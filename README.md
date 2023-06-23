@@ -1,6 +1,6 @@
 # DB Auth direct module
 This module logs in to the database with the front-end user login credentials. Because of this no usernames/passwords are necessary on the webserver, in `config/database.php`.
-After login Laravel creates a session token for further requests. At the same time this plugin creates a new database user with the same name as the session token and the same privileges as the original database user. Further database logins use this token database user. PostGreSQL RLS (Row Level Security) policies are recommended to restrict access to information in the database.
+After login Laravel creates a session token for further requests. At the same time this plugin creates a new database user with the same name as the session token and the same privileges as the original database user. Further database logins use this token database user. PostGreSQL RLS [Row Level Security](https://www.postgresql.org/docs/current/ddl-rowsecurity.html) policies are recommended to restrict access to information in the database.
 
 DBAuth only officially supports PostGreSQL.
 
@@ -18,6 +18,6 @@ DBAuth presents its own static HTML login screen because it needs to ensure that
 Artisan also needs to connect to the database. It will attempt a standard development database login which is wise to use in development situations, and then ask if connection fails.
 
 ## Granting other users access
-When a superuser creates a new user with Winter CMS, DBAuth will create a new PostGreSQL database user as well. This situation can be managed in the DBAuth account tab by super users.
+When a superuser creates a new user with [Winter CMS](https://wintercms.com), DBAuth will create a new PostGreSQL database user as well. This situation can be managed in the DBAuth account tab by super users.
 
 ![DBAuth setup for an account](setup.png "DBAuth setup for an account")
