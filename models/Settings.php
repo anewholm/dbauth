@@ -9,7 +9,7 @@ class Settings extends Model
     public $implement = ['System.Behaviors.SettingsModel'];
 
     // A unique code
-    public $settingsCode = 'acorn_auth_settings';
+    public $settingsCode = 'acornassociated_auth_settings';
 
     // Reference to field configuration
     public $settingsFields = 'fields.yaml';
@@ -21,8 +21,8 @@ class Settings extends Model
     {
         parent::__construct($attributes);
 
-        BackendMenu::setContext('Acorn.Auth', 'system', 'settings');
-        SettingsManager::setContext('Acorn.Auth', 'settings');
+        BackendMenu::setContext('AcornAssociated.Auth', 'system', 'settings');
+        SettingsManager::setContext('AcornAssociated.Auth', 'settings');
     }
 
     public function initSettingsData()
