@@ -2,15 +2,17 @@ fields:
     # These are self-policing hints. 
     # That is, they decide themselves if they should display
     _hint_dev_setup:
-        label:
         tab: DB Auth
         type: partial
         path: ~/modules/dbauth/models/_hint_dev_setup
     _hint_not_setup:
-        label:
         tab: DB Auth
         type: partial
         path: ~/modules/dbauth/models/_hint_not_setup
+    _hint_CURRENT_USER:
+        tab: DB Auth
+        type: partial
+        path: ~/modules/dbauth/models/_hint_CURRENT_USER
     # TODO: Complete the functionality behind DBAuth settings
     auto_create_user:
         label: Auto-Create the backend_users record
