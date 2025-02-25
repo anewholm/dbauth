@@ -11,6 +11,12 @@ class PostGreSQLManager {
         return ($key ? $config[$key] : $config);
     }
 
+    public static function dbCURRENT_USER(): string
+    {
+        $results = DB::select('select CURRENT_USER;');
+        return $results[0]->current_user;
+    }
+
     public static function escapeSQLName(string $name, ?string $quote = '"'): string
     {
         $name  = preg_replace("/(['\"])/", '\\\$1', $name);
@@ -19,6 +25,7 @@ class PostGreSQLManager {
 
     public static function userExists(string $login): bool
     {
+        // TODO: Prepare statement for DB::select
         $loginString = self::escapeSQLName($login, "'");
         return (bool) DB::select("SELECT 1 FROM pg_roles WHERE rolname=$loginString;");
     }

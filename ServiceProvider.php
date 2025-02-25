@@ -42,7 +42,6 @@ class ServiceProvider extends ModuleServiceProvider
                     $input = post();
                     self::checkCreateBackendUser($input['login'], $input['password']);
                 }
-                return FALSE; // Continue
             });
 
             // Check / Create a mirror token_$id database user 
