@@ -2,6 +2,8 @@
 
 use DB;
 use Illuminate\Support\Facades\Config;
+use BackendAuth;
+use Backend\Models\User;
 
 class PostGreSQLManager {
     public static function configDatabase(?string $key): array|string
@@ -17,6 +19,12 @@ class PostGreSQLManager {
         return $results[0]->current_user;
     }
 
+    public static function dbUserName(User $user = NULL): string
+    {
+        if (is_null($user)) $user = BackendAuth::user();
+        return "token_$user->id";
+    }
+    
     public static function escapeSQLName(string $name, ?string $quote = '"'): string
     {
         $name  = preg_replace("/(['\"])/", '\\\$1', $name);
