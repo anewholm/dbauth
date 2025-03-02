@@ -54,7 +54,7 @@ class ServiceProvider extends ModuleServiceProvider
                 // It is important that the main login has GRANT OPTION and CREATE ROLES
                 try {
                     $created = DBManager::checkCreateDBUser(
-                        "token_" . (int) $user->id, 
+                        DBManager::dbUserName($user), 
                         $user->getPersistCode(),
                         $user->is_superuser, // CREATEROLE
                         $user->is_superuser, // SUPERUSER
@@ -72,6 +72,7 @@ class ServiceProvider extends ModuleServiceProvider
             // to login with the token_$id user
             app('db')->extend('pgsql', function($config, $name){
                 $config = ServiceProvider::morphConfig($config);
+
                 // If neither a login, nor a token
                 // then config will still == <DBAUTH>
                 // so we cannot connect to the database
@@ -91,7 +92,10 @@ class ServiceProvider extends ModuleServiceProvider
             // Immediately test the connection
             // Note that the authorisation procedure has not happend yet
             // and we cannot get the username / id yet from session
+            // TODO: Should this test be only APP_DEBUG?
             try {
+                // Force reconnect to trigger the pgsql extend above
+                if (self::isCommandLine()) DB::reconnect();
                 DB::unprepared("select 1");
             } catch (QueryException $ex) {
                 self::showLoginScreen(NULL, $ex);
@@ -344,15 +348,26 @@ class ServiceProvider extends ModuleServiceProvider
                         ],
                     ]);
 
-                    if ($model->exists && !DBManager::userExists($model->login)) {
-                        $form->addTabFields([
-                            'hint_no_db_user' => [
-                                'label'   => '',
-                                'tab'     => 'DB Auth',
-                                'type'    => 'partial',
-                                'path'    => "$moduleDir/models/_hint_no_db_user",
-                            ],
-                        ]);
+                    if ($model->exists) {
+                        if (DBManager::userExists($model->login)) {
+                            $form->addTabFields([
+                                'hint_db_user' => [
+                                    'label'   => '',
+                                    'tab'     => 'DB Auth',
+                                    'type'    => 'partial',
+                                    'path'    => "$moduleDir/models/_hint_db_user",
+                                ],
+                            ]);
+                        } else {
+                            $form->addTabFields([
+                                'hint_no_db_user' => [
+                                    'label'   => '',
+                                    'tab'     => 'DB Auth',
+                                    'type'    => 'partial',
+                                    'path'    => "$moduleDir/models/_hint_no_db_user",
+                                ],
+                            ]);
+                        }
                     }
 
                     $form->addTabFields([
