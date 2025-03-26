@@ -243,7 +243,7 @@ class ServiceProvider extends ModuleServiceProvider
             $username = NULL;
             $password = NULL;
             if (env('ARTISAN_AUTO_LOGIN')) {
-                $username = 'winter';
+                $username = 'artisan';
                 $password = 'QueenPool1@';
             } else {
                 print("\e[1;37;40mDB Auth is active.\e[0m ");
