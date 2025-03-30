@@ -71,6 +71,7 @@ class ServiceProvider extends ModuleServiceProvider
 
             // Trap Session / Cookie admin_auth on subsequent requests
             // to login with the token_$id user
+            // TODO: This is also done in register() so artisan runs it. Maybe delete this one
             app('db')->extend('pgsql', function($config, $name){
                 $config = ServiceProvider::morphConfig($config);
 
@@ -275,6 +276,28 @@ class ServiceProvider extends ModuleServiceProvider
     public function register()
     {
         parent::register();
+
+        // Trap Session / Cookie admin_auth on subsequent requests
+        // to login with the token_$id user
+        // TODO: This is also done in boot() but artisan does not run it. Maybe delete that one
+        app('db')->extend('pgsql', function($config, $name){
+            $config = ServiceProvider::morphConfig($config);
+
+            // If neither a login, nor a token
+            // then config will still == <DBAUTH>
+            // so we cannot connect to the database
+            if ($config['username'] == '<DBAUTH>') {
+                // showLoginScreen() may exit()
+                // However, if this is artisan, it might return a username
+                $config = ServiceProvider::showLoginScreen($config);
+                if ($config['username'] == '<DBAUTH>') 
+                    throw new PDOException("No username provided for database connection");
+            }
+
+            // Connect with the Config::* morphed credentials
+            $connFactory = new ConnectionFactory(app());
+            return $connFactory->make($config, $name);
+        });
 
         $this->registerConsoleCommand('dbauth.setup-access', SetupAccess::class);
 
