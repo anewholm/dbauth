@@ -20,6 +20,7 @@ use Backend\Models\User;
 use Illuminate\Database\QueryException;
 use PDOException;
 use ApplicationException;
+use DBAuth\Console\SetupAccess;
 //use Doctrine\DBAL\Driver\PDO\Exception;
 
 class ServiceProvider extends ModuleServiceProvider
@@ -273,6 +274,10 @@ class ServiceProvider extends ModuleServiceProvider
 
     public function register()
     {
+        parent::register();
+
+        $this->registerConsoleCommand('dbauth.setup-access', SetupAccess::class);
+
         SettingsManager::instance()->registerCallback(function ($manager) {
             $manager->registerSettingItems('Winter.Backend', [
                 'dbauth' => [
