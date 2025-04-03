@@ -1,0 +1,13 @@
+{
+  "name": "acorn/dbauth",
+  "type": "winter-module",
+  "require": {
+    "composer/installers": "~1.0",
+    "php": "^8"
+  },
+  "autoload": {
+    "psr-4": {
+      "DBAuth\\": ""
+    }
+  }
+}

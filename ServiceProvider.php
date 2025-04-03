@@ -21,7 +21,6 @@ use Illuminate\Database\QueryException;
 use PDOException;
 use ApplicationException;
 use DBAuth\Console\SetupAccess;
-//use Doctrine\DBAL\Driver\PDO\Exception;
 
 class ServiceProvider extends ModuleServiceProvider
 {
@@ -103,6 +102,8 @@ class ServiceProvider extends ModuleServiceProvider
                 self::showLoginScreen(NULL, $ex);
             }
         }
+
+        parent::boot(); // VERSION: Winter 1.2.6 'dbauth'
     }
 
     public static function checkCreateBackendUser(string $username, string $password): User
