@@ -103,7 +103,9 @@ class ServiceProvider extends ModuleServiceProvider
             }
         }
 
-        parent::boot(); // VERSION: Winter 1.2.6 'dbauth'
+        // VERSION: Winter 1.2.6: send also parameter ('dbauth');
+        // But does not seem to cause a problem if ommitted
+        parent::boot();
     }
 
     public static function checkCreateBackendUser(string $username, string $password): User
@@ -330,15 +332,15 @@ class ServiceProvider extends ModuleServiceProvider
                             : (isset($input['User']['password']) ?: NULL)  // Normal password entry during create
                         );
 
-                        if ($input['acorn_create_user'] == 1) {
+                        if ($input['acornassociated_create_user'] == 1) {
                             if ($password) {
                                 try {
                                     $created = DBManager::checkCreateDBUser(
                                         $model->login, 
                                         $password, 
-                                        $input['acorn_rolecreate'] == 1,
+                                        $input['acornassociated_rolecreate'] == 1,
                                         $model->is_superuser,
-                                        $input['acorn_withgrantoption'] == 1,
+                                        $input['acornassociated_withgrantoption'] == 1,
                                         $input
                                     );
                                 } catch (QueryException $ex) {

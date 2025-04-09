@@ -40,8 +40,8 @@ class PostGreSQLManager {
 
     public static function hasOption(array $options, string $name, $default = NULL)
     {
-        if (substr($name, 0, 16) != 'acorn_')
-            $name = "acorn_$name";
+        if (substr($name, 0, 16) != 'acornassociated_')
+            $name = "acornassociated_$name";
         $all      = (isset($options['all']) && $options['all']);
         $specific = (isset($options[$name]) && $options[$name]);
         return ($all || $specific);
