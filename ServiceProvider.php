@@ -332,15 +332,15 @@ class ServiceProvider extends ModuleServiceProvider
                             : (isset($input['User']['password']) ?: NULL)  // Normal password entry during create
                         );
 
-                        if ($input['acornassociated_create_user'] == 1) {
+                        if ($input['acorn_create_user'] == 1) {
                             if ($password) {
                                 try {
                                     $created = DBManager::checkCreateDBUser(
                                         $model->login, 
                                         $password, 
-                                        $input['acornassociated_rolecreate'] == 1,
+                                        $input['acorn_rolecreate'] == 1,
                                         $model->is_superuser,
-                                        $input['acornassociated_withgrantoption'] == 1,
+                                        $input['acorn_withgrantoption'] == 1,
                                         $input
                                     );
                                 } catch (QueryException $ex) {
