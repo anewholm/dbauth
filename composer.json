@@ -1,5 +1,5 @@
 {
-  "name": "acornassociated/dbauth",
+  "name": "acorn/dbauth",
   "type": "winter-module",
   "require": {
     "composer/installers": "~1.0",
