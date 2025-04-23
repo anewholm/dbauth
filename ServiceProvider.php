@@ -357,75 +357,75 @@ class ServiceProvider extends ModuleServiceProvider
         
                 // Only a super user can use these tools
                 // on others accounts
-                $authUser = BackendAuth::user();
-                if ($authUser->is_superuser) {
-                    $docroot   = app()->basePath();
-                    $moduleDir = str_replace($docroot, '~', dirname(__FILE__));
-                
-                    // Hints
-                    // This is a self-policing hint (it decides if it is appropriate)
-                    $form->addTabFields([
-                        'hint_not_setup' => [
-                            'label'   => '',
-                            'tab'     => 'DB Auth',
-                            'type'    => 'partial',
-                            'path'    => "$moduleDir/models/_hint_not_setup",
-                        ],
-                        'hint_dev_setup' => [
-                            'label'   => '',
-                            'tab'     => 'DB Auth',
-                            'type'    => 'partial',
-                            'path'    => "$moduleDir/models/_hint_dev_setup",
-                        ],
-                    ]);
+                if ($authUser = BackendAuth::user()) {
+                    if ($authUser->is_superuser) {
+                        $moduleDir = '~/modules/dbauth'; // Beware of realpath
+                    
+                        // Hints
+                        // This is a self-policing hint (it decides if it is appropriate)
+                        $form->addTabFields([
+                            'hint_not_setup' => [
+                                'label'   => '',
+                                'tab'     => 'DB Auth',
+                                'type'    => 'partial',
+                                'path'    => "$moduleDir/models/_hint_not_setup",
+                            ],
+                            'hint_dev_setup' => [
+                                'label'   => '',
+                                'tab'     => 'DB Auth',
+                                'type'    => 'partial',
+                                'path'    => "$moduleDir/models/_hint_dev_setup",
+                            ],
+                        ]);
 
-                    if ($model->exists) {
-                        if (DBManager::userExists($model->login)) {
-                            $form->addTabFields([
-                                'hint_db_user' => [
-                                    'label'   => '',
-                                    'tab'     => 'DB Auth',
-                                    'type'    => 'partial',
-                                    'path'    => "$moduleDir/models/_hint_db_user",
-                                ],
-                            ]);
-                        } else {
-                            $form->addTabFields([
-                                'hint_no_db_user' => [
-                                    'label'   => '',
-                                    'tab'     => 'DB Auth',
-                                    'type'    => 'partial',
-                                    'path'    => "$moduleDir/models/_hint_no_db_user",
-                                ],
-                            ]);
+                        if ($model->exists) {
+                            if (DBManager::userExists($model->login)) {
+                                $form->addTabFields([
+                                    'hint_db_user' => [
+                                        'label'   => '',
+                                        'tab'     => 'DB Auth',
+                                        'type'    => 'partial',
+                                        'path'    => "$moduleDir/models/_hint_db_user",
+                                    ],
+                                ]);
+                            } else {
+                                $form->addTabFields([
+                                    'hint_no_db_user' => [
+                                        'label'   => '',
+                                        'tab'     => 'DB Auth',
+                                        'type'    => 'partial',
+                                        'path'    => "$moduleDir/models/_hint_no_db_user",
+                                    ],
+                                ]);
+                            }
                         }
-                    }
 
-                    $form->addTabFields([
-                        'description' => [
-                            'label'   => '',
-                            'tab'     => 'DB Auth',
-                            'type'    => 'partial',
-                            'span'    => 'right',
-                            'path'    => "$moduleDir/models/_description", // This is a dummy, just to hold the comment
-                            'comment' => '<p class="help-block">You are seeing this other users tab because you are a <strong>Super User</strong>.<br/>DB Auth forces login in to the database with the users login credentials, instead of hard-coded credentials in the <strong>.env</strong> file. The <strong>.env</strong> file should have &lt;DBAUTH&gt; for the <strong>DB_USERNAME</strong> / <strong>PASSWORD</strong> settings. Every user that wants to login to the database must therefore have a Database user with the correct privileges, not just an entry in the backend_users table.</p>',
-                            'commentHtml' => TRUE,
-                        ],
-                        'user_tools' => [
-                            'label'   => '',
-                            'tab'     => 'DB Auth',
-                            'type'    => 'partial',
-                            'span'    => 'left',
-                            'path'    => "$moduleDir/models/_user_tools",
-                        ],
-                        'db_privileges' => [
-                            'label'   => '',
-                            'tab'     => 'DB Auth',
-                            'type'    => 'partial',
-                            'span'    => 'right',
-                            'path'    => "$moduleDir/models/_db_privileges",
-                        ],
-                    ]);
+                        $form->addTabFields([
+                            'description' => [
+                                'label'   => '',
+                                'tab'     => 'DB Auth',
+                                'type'    => 'partial',
+                                'span'    => 'right',
+                                'path'    => "$moduleDir/models/_description", // This is a dummy, just to hold the comment
+                                'comment' => '<p class="help-block">You are seeing this other users tab because you are a <strong>Super User</strong>.<br/>DB Auth forces login in to the database with the users login credentials, instead of hard-coded credentials in the <strong>.env</strong> file. The <strong>.env</strong> file should have &lt;DBAUTH&gt; for the <strong>DB_USERNAME</strong> / <strong>PASSWORD</strong> settings. Every user that wants to login to the database must therefore have a Database user with the correct privileges, not just an entry in the backend_users table.</p>',
+                                'commentHtml' => TRUE,
+                            ],
+                            'user_tools' => [
+                                'label'   => '',
+                                'tab'     => 'DB Auth',
+                                'type'    => 'partial',
+                                'span'    => 'left',
+                                'path'    => "$moduleDir/models/_user_tools",
+                            ],
+                            'db_privileges' => [
+                                'label'   => '',
+                                'tab'     => 'DB Auth',
+                                'type'    => 'partial',
+                                'span'    => 'right',
+                                'path'    => "$moduleDir/models/_db_privileges",
+                            ],
+                        ]);
+                    }
                 }
             }
         });
