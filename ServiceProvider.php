@@ -7,6 +7,7 @@ use DBAuth\PostGreSQLManager as DBManager;
 use BackendAuth;
 use Event;
 use DB;
+use File;
 use Flash;
 use Backend\Controllers\Users;
 use System\Classes\SettingsManager;
@@ -26,9 +27,23 @@ class ServiceProvider extends ModuleServiceProvider
 {
     use \System\Traits\SecurityController;
     
+    // ----------------------------------------------------- Status
+    protected function isEnabled(): bool
+    {
+        // config/database.php username=<DBAUTH> necessary for this functionality 
+        return DBManager::configDatabase('username') == '<DBAUTH>';
+    }
+
+    protected function isLoggingIn(): bool
+    {
+        $input = post();
+        return (isset($input['login']) && isset($input['password']));
+    }
+
+    // ----------------------------------------------------- Boot, attach, test
     public function boot()
     {
-        if (self::isEnabled()) {
+        if ($this->isEnabled()) {
             // TODO: SECURITY: Disabled this because I cannot get XSRF to work
             // on the login form
             Config::set('cms.enableCsrfProtection', false);
@@ -36,11 +51,11 @@ class ServiceProvider extends ModuleServiceProvider
             Event::listen('backend.page.beforeDisplay', function($action, $params) {
                 // After DB connected
                 // Before Auth::Authenticate()'d against backend_users
-                if (self::isLoggingIn()) {
+                if ($this->isLoggingIn()) {
                     // Auto check / create a backend_users Winter user
                     // for this successful DB login
                     $input = post();
-                    self::checkCreateBackendUser($input['login'], $input['password']);
+                    $this->checkCreateBackendUser($input['login'], $input['password']);
                 }
             });
 
@@ -62,7 +77,8 @@ class ServiceProvider extends ModuleServiceProvider
                         array("all" => TRUE)
                     );
                 } catch (QueryException $ex) {
-                    self::showLoginScreen(NULL, $ex);
+                    // This will show the exception message
+                    $this->showLoginScreen(NULL, $ex);
                 }
     
                 return $created;
@@ -72,7 +88,7 @@ class ServiceProvider extends ModuleServiceProvider
             // to login with the token_$id user
             // TODO: This is also done in register() so artisan runs it. Maybe delete this one
             app('db')->extend('pgsql', function($config, $name){
-                $config = ServiceProvider::morphConfig($config);
+                $config = $this->morphConfig($config);
 
                 // If neither a login, nor a token
                 // then config will still == <DBAUTH>
@@ -80,7 +96,7 @@ class ServiceProvider extends ModuleServiceProvider
                 if ($config['username'] == '<DBAUTH>') {
                     // showLoginScreen() may exit()
                     // However, if this is artisan, it might return a username
-                    $config = ServiceProvider::showLoginScreen($config);
+                    $config = $this->showLoginScreen($config);
                     if ($config['username'] == '<DBAUTH>') 
                         throw new PDOException("No username provided for database connection");
                 }
@@ -96,10 +112,10 @@ class ServiceProvider extends ModuleServiceProvider
             // TODO: Should this test be only APP_DEBUG?
             try {
                 // Force reconnect to trigger the pgsql extend above
-                if (self::isCommandLine()) DB::reconnect();
+                if ($this->app->runningInConsole()) DB::reconnect();
                 DB::unprepared("select 1");
             } catch (QueryException $ex) {
-                self::showLoginScreen(NULL, $ex);
+                $this->showLoginScreen(NULL, $ex);
             }
         }
 
@@ -108,7 +124,7 @@ class ServiceProvider extends ModuleServiceProvider
         parent::boot();
     }
 
-    public static function checkCreateBackendUser(string $username, string $password): User
+    public function checkCreateBackendUser(string $username, string $password): User
     {
         $user = User::where('login', '=', $username)->first();
         if (is_null($user)) {
@@ -128,25 +144,13 @@ class ServiceProvider extends ModuleServiceProvider
         return $user;
     }
 
-    protected static function isEnabled(): bool
-    {
-        // config/database.php username=<DBAUTH> necessary for this functionality 
-        return DBManager::configDatabase('username') == '<DBAUTH>';
-    }
-
-    protected static function isLoggingIn(): bool
-    {
-        $input = post();
-        return (isset($input['login']) && isset($input['password']));
-    }
-
-    public static function morphConfig(array $config): array
+    public function morphConfig(array $config): array
     {
         // Note $config passed by reference
         // Return value of FALSE indicates no changes to config
         // so username may still == <DBAUTH>
         // causing connection failure
-        if (self::isLoggingIn()) {
+        if ($this->isLoggingIn()) {
             // Allow normal logging in process
             // The backend.user.login event will create a DB user
             // for the resultant new login token
@@ -195,28 +199,16 @@ class ServiceProvider extends ModuleServiceProvider
         return $config;
     }
 
-    protected static function isCommandLine()
-    {
-        return !self::isHTTPCall();
-    }
-
-    protected static function isHTTPCall()
-    {
-        return isset($_SERVER['HTTP_HOST']);
-    }
-
-    public static function showLoginScreen(?array $config = array(), ?PDOException $ex = NULL): array
+    public function showLoginScreen(?array $config = array(), ?PDOException $ex = NULL): array
     {
         // Translate errors
         $exceptionMessage = NULL;
         if ($ex) {
             switch ($ex->getCode()) {
-                case 7:
-                    // Password authentication failed
+                case 7: // Password authentication failed
                     $exceptionMessage = 'Password authentication failed.';
                     break;
-                case 42501: 
-                    // Insufficient privilege: 7 ERROR:  permission denied to create role
+                case 42501: // Insufficient privilege: 7 ERROR:  permission denied to create role
                     $exceptionMessage = 'Create roles privilege is required.';
                     break;
                 default:
@@ -224,25 +216,7 @@ class ServiceProvider extends ModuleServiceProvider
             }
         }   
 
-        if (self::isHTTPCall()) {
-            // TODO: SECURITY: XSRF protection is disabled above
-            Session::start(); // => loadSession() && regenerateToken();
-            //$cookie = $this->makeXsrfCookie();
-            //setcookie($cookie->getName(), $cookie->getValue());
-            $xsrf = Session::token();
-            Session::save();
-            //$sessionId = Session::getId();
-
-            // Show the fixed HTML login screen and exit
-            // to avoid any db access attempts from other plugins
-            include ServiceProvider::loginScreenPath();
-
-            // Prevent any further execution
-            // as it may well try to connect to the database
-            // and we have no credentials to do so
-            exit(0);
-        } else {
-            // Console line login
+        if ($this->app->runningInConsole()) {
             if ($exceptionMessage) print("\e[1;37;41m$exceptionMessage\e[0m\n");
 
             $username = NULL;
@@ -261,21 +235,51 @@ class ServiceProvider extends ModuleServiceProvider
             }
             $config['username'] = $username;
             $config['password'] = $password;
+        } 
+        
+        else { // HTTP call
+            // TODO: SECURITY: XSRF protection is disabled above
+            Session::start(); // => loadSession() && regenerateToken();
+            //$cookie = $this->makeXsrfCookie();
+            //setcookie($cookie->getName(), $cookie->getValue());
+            $xsrf = Session::token();
+            Session::save();
+            //$sessionId = Session::getId();
+
+            // TODO: If front-end, login with frontend un-privileged user
+            if ($this->app->runningInBackend()) {            
+                // Show the fixed HTML login screen and exit
+                // to avoid any db access attempts from other plugins
+                include $this->loginScreenPath();
+                // Prevent any further execution
+                // as it may well try to connect to the database
+                // and we have no credentials to do so
+                exit(0);
+            } 
+            else {
+                // Well, it is a front-end request
+                // which does NOT mean there is a front-end necessarily
+                // The login will fail if not
+                $config['username'] = 'frontend';
+                $config['password'] = 'Fvv%#6nDFbR23';
+            }
         }
 
         return $config;
     }
 
-    protected static function loginScreenPath(): string
+    protected function loginScreenPath(): string
     {
         // TODO: publish this resource to app
         $dir     = dirname(__FILE__);
-        $docroot = app()->basePath();
+        $docroot = $this->app->basePath();
         $path    = "$docroot/public/resources/login.php";
-        if (!file_exists($path)) $path = "$dir/resources/login.php";
+        if (!File::exists($path)) 
+            $path = "$dir/resources/login.php";
         return $path;
     }
 
+    // ----------------------------------------------------- User administration
     public function register()
     {
         parent::register();
@@ -284,7 +288,7 @@ class ServiceProvider extends ModuleServiceProvider
         // to login with the token_$id user
         // TODO: This is also done in boot() but artisan does not run it. Maybe delete that one
         app('db')->extend('pgsql', function($config, $name){
-            $config = ServiceProvider::morphConfig($config);
+            $config = $this->morphConfig($config);
 
             // If neither a login, nor a token
             // then config will still == <DBAUTH>
@@ -292,7 +296,7 @@ class ServiceProvider extends ModuleServiceProvider
             if ($config['username'] == '<DBAUTH>') {
                 // showLoginScreen() may exit()
                 // However, if this is artisan, it might return a username
-                $config = ServiceProvider::showLoginScreen($config);
+                $config = $this->showLoginScreen($config);
                 if ($config['username'] == '<DBAUTH>') 
                     throw new PDOException("No username provided for database connection");
             }
