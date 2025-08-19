@@ -42,6 +42,7 @@ class PostGreSQLManager {
     {
         if (substr($name, 0, 16) != 'acorn_')
             $name = "acorn_$name";
+        $name     = "_$name";
         $all      = (isset($options['all']) && $options['all']);
         $specific = (isset($options[$name]) && $options[$name]);
         return ($all || $specific);
@@ -79,7 +80,7 @@ class PostGreSQLManager {
         return $userExists;
     }
 
-    public static function checkCreateDBUser(string $login, string $password, ?bool $withCreateRole = FALSE, ?bool $asSuperUser = FALSE, ?bool $withGrantOption = FALSE, ?array $options = array()): bool
+    public static function upCreateDBUser(string $login, string $password, ?bool $withCreateRole = FALSE, ?bool $asSuperUser = FALSE, ?bool $withGrantOption = FALSE, ?array $options = array()): bool
     {
         $database       = self::configDatabase('database');
         $databaseName   = self::escapeSQLName($database);
