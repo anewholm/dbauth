@@ -4,11 +4,12 @@ use Illuminate\Support\Facades\App;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Session\SessionManager;
 use DBAuth\PostGreSQLManager as DBManager;
+use DBAuth\Models\Settings;
 use BackendAuth;
 use Event;
 use DB;
 use File;
-use Flash;
+use Lang;
 use Backend\Controllers\Users;
 use System\Classes\SettingsManager;
 use Winter\Storm\Support\ModuleServiceProvider;
@@ -20,13 +21,15 @@ use Form as FormHelper;
 use Backend\Models\User;
 use Illuminate\Database\QueryException;
 use PDOException;
-use ApplicationException;
+use Winter\Storm\Exception\ApplicationException;
 use DBAuth\Console\SetupAccess;
 
 class ServiceProvider extends ModuleServiceProvider
 {
     use \System\Traits\SecurityController;
     
+    static $tab = 'dbauth::lang.module.name';
+
     // ----------------------------------------------------- Status
     protected function isEnabled(): bool
     {
@@ -40,14 +43,17 @@ class ServiceProvider extends ModuleServiceProvider
         return (isset($input['login']) && isset($input['password']));
     }
 
-    // ----------------------------------------------------- Boot, attach, test
     public function boot()
     {
+        // Register localization
+        Lang::addNamespace('dbauth', realpath('modules/dbauth/lang'));
+
         if ($this->isEnabled()) {
             // TODO: SECURITY: Disabled this because I cannot get XSRF to work
             // on the login form
             Config::set('cms.enableCsrfProtection', false);
 
+            // ---------------------------------------  Login control
             Event::listen('backend.page.beforeDisplay', function($action, $params) {
                 // After DB connected
                 // Before Auth::Authenticate()'d against backend_users
@@ -67,15 +73,19 @@ class ServiceProvider extends ModuleServiceProvider
                 // Create a new DB user for the login token
                 // as we already have a DB connection that can create users
                 // It is important that the main login has GRANT OPTION and CREATE ROLES
+                // TODO: Re-visit all these GRANTS!!!
                 try {
-                    $created = DBManager::checkCreateDBUser(
-                        DBManager::dbUserName($user), 
-                        $user->getPersistCode(),
-                        $user->is_superuser, // CREATEROLE
-                        $user->is_superuser, // SUPERUSER
-                        $user->is_superuser, // WITH GRANT
-                        array("all" => TRUE)
-                    );
+                    $autoCreateUser  = (Settings::get('auto_create_db_user') == '1');
+                    if ($autoCreateUser) {
+                        $created = DBManager::upCreateDBUser(
+                            DBManager::dbUserName($user), // token_%
+                            $user->getPersistCode(),
+                            $user->is_superuser, // CREATEROLE
+                            $user->is_superuser, // SUPERUSER
+                            $user->is_superuser, // WITH GRANT
+                            array("all" => TRUE)
+                        );
+                    }
                 } catch (QueryException $ex) {
                     // This will show the exception message
                     $this->showLoginScreen(NULL, $ex);
@@ -119,6 +129,36 @@ class ServiceProvider extends ModuleServiceProvider
             }
         }
 
+        // --------------------------------------- Extend Backend users fields and columns for management
+        Users::extendListColumns(function ($list, $user) {
+            if ($user instanceof User) {
+                $authUser = BackendAuth::user();
+                if ($authUser && $authUser->is_superuser) {
+                    $list->addColumns($this->userColumns());
+                }
+            }
+        });
+
+        Users::extendFormFields(function ($form, $user, $context) {
+            if ($user instanceof User) {
+                // -------------------------- onSave create the DB user
+                $user->bindEvent('model.beforeSave', function () use(&$user) {
+                    return $this->beforeSave($user);
+                });
+                
+                // -------------------------- Fields
+                // Only a super user can use these tools
+                // on others accounts
+                $form->getController()->addViewPath('modules/dbauth/partials');
+                $form->addTabFields($this->hints($user));
+                $form->addTabFields($this->userFields());
+            }
+        });
+
+        BackendAuth::registerCallback(function ($manager) {
+            $manager->registerPermissions('DBAuth', $this->registerPermissions());
+        });
+
         // VERSION: Winter 1.2.6: send also parameter ('dbauth');
         // But does not seem to cause a problem if ommitted
         parent::boot();
@@ -126,19 +166,28 @@ class ServiceProvider extends ModuleServiceProvider
 
     public function checkCreateBackendUser(string $username, string $password): User
     {
-        $user = User::where('login', '=', $username)->first();
-        if (is_null($user)) {
-            // Database connection was successful
-            // but backend_users record not there
-            // JIT for login procedure
-            $user = new User([
-                'login'      => $username,
-                'first_name' => $username,
-                'email'      => "$username@nowhere.com",
-                'password'   => $password,
-                'password_confirmation' => $password,
-            ]);
-            $user->save();
+        // Database connection was successful
+        // with a PostGres DB user with the sent user/pass
+        // Backend\Models\User (backend_users)
+        $autoCreateBackendUser = (Settings::get('auto_create_backend_user') == '1');
+        if ($autoCreateBackendUser) {
+            $user = User::where('login', '=', $username)->first();
+            if (is_null($user)) {
+                // backend_users record not there
+                // JIT for login procedure
+                $user = User::create([
+                    'login'      => $username,
+                    'first_name' => $username,
+                    'email'      => "$username@nowhere.com",
+                    'password'   => $password,
+                    'password_confirmation' => $password,
+                ]);
+            } else if (!$user->checkPassword($password)) {
+                // Hash::check($password, $this->password);
+                // Password is wrong. Adjust it!
+                $user->password = $password; // =>setPasswordAttribute()
+                $user->save();
+            }
         }
 
         return $user;
@@ -206,10 +255,10 @@ class ServiceProvider extends ModuleServiceProvider
         if ($ex) {
             switch ($ex->getCode()) {
                 case 7: // Password authentication failed
-                    $exceptionMessage = 'Password authentication failed.';
+                    $exceptionMessage = Lang::get('dbauth::lang.errors.auth_failed');
                     break;
                 case 42501: // Insufficient privilege: 7 ERROR:  permission denied to create role
-                    $exceptionMessage = 'Create roles privilege is required.';
+                    $exceptionMessage = trans('dbauth::lang.errors.create_role_required');
                     break;
                 default:
                     $exceptionMessage = $ex->getMessage();
@@ -246,7 +295,6 @@ class ServiceProvider extends ModuleServiceProvider
             Session::save();
             //$sessionId = Session::getId();
 
-            // TODO: If front-end, login with frontend un-privileged user
             if ($this->app->runningInBackend()) {            
                 // Show the fixed HTML login screen and exit
                 // to avoid any db access attempts from other plugins
@@ -309,129 +357,273 @@ class ServiceProvider extends ModuleServiceProvider
         $this->registerConsoleCommand('dbauth.setup-access', SetupAccess::class);
 
         SettingsManager::instance()->registerCallback(function ($manager) {
-            $manager->registerSettingItems('Winter.Backend', [
-                'dbauth' => [
-                    'label'       => 'DataBase Authorisation settings',
-                    'description' => 'Manage direct database authorisation setup.',
-                    'category'    => 'system::lang.system.categories.system',
-                    'icon'        => 'icon-cog',
-                    'class'       => 'DBAuth\Models\Settings',
-                    'order'       => 500,
-                    'keywords'    => 'security database',
-                    'permissions' => []
-                ]
-            ]);
+            $manager->registerSettingItems('Winter.Backend', $this->registerSettings());
         });
+    }
 
-        Users::extendFormFields(function ($form, $model, $context) {
-            if (is_a($model, User::class)) {
-                $model->bindEvent('model.beforeSave', function () use ($model) {
-                    $authUser = BackendAuth::user();
-                    if ($authUser->is_superuser) {
-                        // _tools & _db_privileges has sent through extra 
-                        // non-Model settings
-                        $input    = input();
-                        $password = (isset($input['dbauth_password']) && $input['dbauth_password']
-                            ? $input['dbauth_password'] 
-                            : (isset($input['User']['password']) ?: NULL)  // Normal password entry during create
-                        );
+    public function hints(User $user): array
+    {
+        $hints = array();
 
-                        if ($input['acorn_create_user'] == 1) {
-                            if ($password) {
-                                try {
-                                    $created = DBManager::checkCreateDBUser(
-                                        $model->login, 
-                                        $password, 
-                                        $input['acorn_rolecreate'] == 1,
-                                        $model->is_superuser,
-                                        $input['acorn_withgrantoption'] == 1,
-                                        $input
-                                    );
-                                } catch (QueryException $ex) {
-                                    throw new ApplicationException($ex->getMessage());
-                                }
-                            } else {
-                                throw new ApplicationException('Password required');
-                            }
-                        } else {
-                            DBManager::checkDropDBUser($model->login);
-                        }
-                    }
-                });
+        $username  = DBManager::configDatabase('username');
+        $password  = DBManager::configDatabase('password');
         
-                // Only a super user can use these tools
-                // on others accounts
-                if ($authUser = BackendAuth::user()) {
-                    if ($authUser->is_superuser) {
-                        $moduleDir = '~/modules/dbauth'; // Beware of realpath
-                    
-                        // Hints
-                        // This is a self-policing hint (it decides if it is appropriate)
-                        $form->addTabFields([
-                            'hint_not_setup' => [
-                                'label'   => '',
-                                'tab'     => 'DB Auth',
-                                'type'    => 'partial',
-                                'path'    => "$moduleDir/models/_hint_not_setup",
-                            ],
-                            'hint_dev_setup' => [
-                                'label'   => '',
-                                'tab'     => 'DB Auth',
-                                'type'    => 'partial',
-                                'path'    => "$moduleDir/models/_hint_dev_setup",
-                            ],
-                        ]);
+        if ($username != '<DBAUTH>' || $password != '<DBAUTH>')
+            $hints['hint_not_setup'] = [
+                'label'   => '',
+                'tab'     => self::$tab,
+                'type'    => 'partial',
+                'path'    => "hint_not_setup",
+                'permissions' => array('dbauth.setup_user'),
+            ];
 
-                        if ($model->exists) {
-                            if (DBManager::userExists($model->login)) {
-                                $form->addTabFields([
-                                    'hint_db_user' => [
-                                        'label'   => '',
-                                        'tab'     => 'DB Auth',
-                                        'type'    => 'partial',
-                                        'path'    => "$moduleDir/models/_hint_db_user",
-                                    ],
-                                ]);
-                            } else {
-                                $form->addTabFields([
-                                    'hint_no_db_user' => [
-                                        'label'   => '',
-                                        'tab'     => 'DB Auth',
-                                        'type'    => 'partial',
-                                        'path'    => "$moduleDir/models/_hint_no_db_user",
-                                    ],
-                                ]);
-                            }
-                        }
+        if ($username == 'winter'
+            && strstr($password, 'Quee') !== FALSE
+            && strstr($password, 'Poo')  !== FALSE
+        )
+            $hints['hint_dev_setup'] = [
+                'label'   => '',
+                'tab'     => self::$tab,
+                'type'    => 'partial',
+                'path'    => "hint_dev_setup",
+                'permissions' => array('dbauth.setup_user'),
+            ];
 
-                        $form->addTabFields([
-                            'description' => [
-                                'label'   => '',
-                                'tab'     => 'DB Auth',
-                                'type'    => 'partial',
-                                'span'    => 'right',
-                                'path'    => "$moduleDir/models/_description", // This is a dummy, just to hold the comment
-                                'comment' => '<p class="help-block">You are seeing this other users tab because you are a <strong>Super User</strong>.<br/>DB Auth forces login in to the database with the users login credentials, instead of hard-coded credentials in the <strong>.env</strong> file. The <strong>.env</strong> file should have &lt;DBAUTH&gt; for the <strong>DB_USERNAME</strong> / <strong>PASSWORD</strong> settings. Every user that wants to login to the database must therefore have a Database user with the correct privileges, not just an entry in the backend_users table.</p>',
-                                'commentHtml' => TRUE,
-                            ],
-                            'user_tools' => [
-                                'label'   => '',
-                                'tab'     => 'DB Auth',
-                                'type'    => 'partial',
-                                'span'    => 'left',
-                                'path'    => "$moduleDir/models/_user_tools",
-                            ],
-                            'db_privileges' => [
-                                'label'   => '',
-                                'tab'     => 'DB Auth',
-                                'type'    => 'partial',
-                                'span'    => 'right',
-                                'path'    => "$moduleDir/models/_db_privileges",
-                            ],
-                        ]);
+        if ($user->exists) {
+            if (DBManager::userExists($user->login)) {
+                $hints['hint_db_user'] = [
+                    'label'   => '',
+                    'tab'     => self::$tab,
+                    'type'    => 'partial',
+                    'path'    => "hint_db_user",
+                    'permissions' => array('dbauth.setup_user'),
+                ];
+            } else {
+                $hints['hint_no_db_user'] = [
+                    'label'   => '',
+                    'tab'     => self::$tab,
+                    'type'    => 'partial',
+                    'path'    => "hint_no_db_user",
+                    'permissions' => array('dbauth.setup_user'),
+                ];
+            }
+        }
+
+        return $hints;
+    }
+
+    public function beforeSave(User $user): void
+    {
+        $authUser = BackendAuth::user();
+        if ($authUser->is_superuser) {
+            $purgeValues     = $user->getOriginalPurgeValues();
+            $dbauthPassword  = (isset($purgeValues['_acorn_dbauth_password']) && $purgeValues['_acorn_dbauth_password'] ? $purgeValues['_acorn_dbauth_password'] : NULL);
+            $createPassword  = (isset($purgeValues['password_confirmation'])            && $purgeValues['password_confirmation'] ? $purgeValues['password_confirmation'] : NULL);
+            $roleCreate      = (isset($purgeValues['_acorn_rolecreate'])      && $purgeValues['_acorn_rolecreate']      == '1');
+            $withGrantOption = (isset($purgeValues['_acorn_withgrantoption']) && $purgeValues['_acorn_withgrantoption'] == '1');
+            $isSyncing       = ($user->acorn_create_sync_user == '1');
+            // Update: DBAuth password (because we do not know what it was on create)
+            // Create: Normal password
+            $password        = ($dbauthPassword ?: $createPassword);
+            $autoCreateUser  = (Settings::get('auto_create_db_user') == '1');
+
+            if ($isSyncing && $autoCreateUser) {
+                if ($password) {
+                    try {
+                        // Will also try to sync the password if the user already exists
+                        $created = DBManager::upCreateDBUser(
+                            $user->login, 
+                            $password, 
+                            $roleCreate,
+                            $user->is_superuser,
+                            $withGrantOption,
+                            $purgeValues
+                        );
+                    } catch (QueryException $ex) {
+                        throw new ApplicationException($ex->getMessage());
                     }
                 }
+            } else {
+                DBManager::checkDropDBUser($user->login);
             }
-        });
+        }
+    }
+
+    public function userColumns(): array
+    {
+        return [
+            'acorn_create_sync_user' => [
+                'label' => 'dbauth::lang.models.user.sync_user',
+                'type'  => 'partial',
+                'path'  => 'modules/dbauth/partials/tick',
+            ],
+        ];
+    }
+
+    public function userFields(): array
+    {
+        return [
+            'acorn_create_sync_user' => [
+                'label'    => 'dbauth::lang.models.user.sync_user',
+                'type'     => 'switch',
+                'tab'      => self::$tab,
+                'default'  => true,
+                'span'     => 'storm',
+                'cssClass' => 'col-xs-3',
+                'comment'  => 'dbauth::lang.models.user.sync_user_comment',
+                'commentHtml' => TRUE,
+                'attributes'  => array('autocomplete' => 'off'),
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            '_acorn_dbauth_password' => [
+                'label'    => 'dbauth::lang.models.user.dbauth_password',
+                'tab'      => self::$tab,
+                'type'     => 'sensitive',
+                'required' => true,
+                'span'     => 'storm',
+                'cssClass' => 'col-xs-3',
+                'comment'  => 'dbauth::lang.models.user.dbauth_password_comment',
+                'commentHtml' => TRUE,
+                'attributes'  => array('autocomplete' => 'off'),
+                'context'  => 'update',
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            '_description' => [
+                'label'    => '',
+                'type'     => 'section',
+                'tab'      => self::$tab,
+                'span'     => 'storm',
+                'cssClass' => 'col-xs-6',
+                'comment'  => 'dbauth::lang.module.description',
+                'commentHtml' => TRUE,
+                'permissions' => array('dbauth.setup_user'),
+            ],
+
+            // DB privileges for token
+            '_acorn_rolecreate' => [
+                'label'    => 'dbauth::lang.models.user.rolecreate',
+                'type'     => 'checkbox',
+                'tab'      => self::$tab,
+                'required' => true,
+                'span'     => 'storm',
+                'cssClass' => 'col-xs-12 col-md-4 new-row',
+                'attributes' => array('autocomplete' => 'off', 'checked' => true),
+                'comment'  => 'dbauth::lang.models.user.rolecreate_comment',
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            '_acorn_withgrantoption' => [
+                'label'    => 'dbauth::lang.models.user.withgrantoption',
+                'type'     => 'checkbox',
+                'tab'      => self::$tab,
+                'span'     => 'storm',
+                'cssClass' => 'col-xs-12 col-md-4',
+                'attributes' => array('autocomplete' => 'off', 'checked' => true),
+                'comment'  => 'dbauth::lang.models.user.withgrantoption_comment',
+                'commentHtml' => TRUE,
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            '_acorn_db_super_user' => [
+                'label'   => 'dbauth::lang.models.user.db_super_user',
+                'type'    => 'checkbox',
+                'tab'     => self::$tab,
+                'span'    => 'storm',
+                'cssClass' => 'col-xs-12 col-md-4',
+                'attributes' => array('autocomplete' => 'off'),
+                'comment' => 'dbauth::lang.models.user.db_super_user_comment',
+                'commentHtml' => TRUE,
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            
+            // Schema usage etc.
+            '_acorn_grants' => [
+                'label'   => 'dbauth::lang.models.user.grants',
+                'type'    => 'section',
+                'tab'     => self::$tab,
+                'comment'  => 'dbauth::lang.models.user.grants_comment',
+                'commentHtml' => TRUE,
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            '_acorn_grant_database_usage' => [
+                'label'   => 'dbauth::lang.models.user.grant_database_usage',
+                'type'    => 'checkbox',
+                'tab'     => self::$tab,
+                'required' => true,
+                'span'    => 'storm',
+                'cssClass'   => 'col-xs-12 col-md-4',
+                'attributes' => array('autocomplete' => 'off', 'checked' => true),
+                'comment' => 'dbauth::lang.models.user.grant_database_usage_comment',
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            '_acorn_grant_schema_usage' => [
+                'label'   => 'dbauth::lang.models.user.schema_usage',
+                'type'    => 'checkbox',
+                'tab'     => self::$tab,
+                'required' => true,
+                'span'    => 'storm',
+                'cssClass'   => 'col-xs-12 col-md-4',
+                'attributes' => array('autocomplete' => 'off', 'checked' => true),
+                'comment' => 'dbauth::lang.models.user.schema_usage_comment',
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            '_acorn_grant_tables_all' => [
+                'label'   => 'dbauth::lang.models.user.grant_tables_all',
+                'type'    => 'checkbox',
+                'tab'     => self::$tab,
+                'span'    => 'storm',
+                'cssClass' => 'col-xs-12 col-md-4',
+                'attributes' => array('autocomplete' => 'off', 'checked' => true),
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            '_acorn_grant_sequences_all' => [
+                'label'    => 'dbauth::lang.models.user.grant_sequences_all',
+                'type'     => 'checkbox',
+                'tab'      => self::$tab,
+                'span'     => 'storm',
+                'cssClass' => 'col-xs-12 col-md-4',
+                'attributes' => array('autocomplete' => 'off', 'checked' => true),
+                'comment'  => 'dbauth::lang.models.user.grant_sequences_all_comment',
+                'commentHtml' => TRUE,
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            '_acorn_grant_functions_all' => [
+                'label'   => 'dbauth::lang.models.user.grant_functions_all',
+                'type'    => 'checkbox',
+                'tab'     => self::$tab,
+                'span'    => 'storm',
+                'cssClass' => 'col-xs-12 col-md-4',
+                'attributes' => array('autocomplete' => 'off', 'checked' => true),
+                'permissions' => array('dbauth.setup_user'),
+            ],
+        ];
+    }
+
+    public function registerPermissions(): array
+    {
+        return [
+            'dbauth.setup_user' => [
+                'tab'   => 'acorn::lang.permissions.tab',
+                'label' => 'dbauth::lang.permissions.setup_user'
+            ],
+            'dbauth.manage_settings' => [
+                'tab'   => 'acorn::lang.permissions.tab',
+                'label' => 'dbauth::lang.permissions.manage_settings'
+            ],
+        ];
+    }
+    
+    public function registerSettings(): array
+    {
+        return [
+            'dbauth' => [
+                'label'       => 'DataBase Authorisation settings',
+                'description' => 'Manage direct database authorisation setup.',
+                'category'    => 'system::lang.system.categories.system',
+                'icon'        => 'icon-cog',
+                'class'       => 'DBAuth\Models\Settings',
+                'order'       => 500,
+                'keywords'    => 'security database',
+                'permissions' => ['dbauth.manage_settings']
+            ]
+        ];
     }
 }
