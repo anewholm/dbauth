@@ -3,6 +3,7 @@
 use DB;
 use Illuminate\Support\Facades\Config;
 use BackendAuth;
+use Exception;
 use Backend\Models\User;
 
 class PostGreSQLManager {
@@ -36,6 +37,23 @@ class PostGreSQLManager {
         // TODO: Prepare statement for DB::select
         $loginString = self::escapeSQLName($login, "'");
         return (bool) DB::select("SELECT 1 FROM pg_roles WHERE rolname=$loginString;");
+    }
+
+    public static function dbUserAttributes(string $login): array|bool
+    {
+        // Allow exceptions to bubble normally
+        // Return of FALSE indicates that the user does not exist
+        // rolsuper | rolinherit | rolcreaterole | rolcreatedb | rolcanlogin | rolreplication
+        $userOptions = FALSE;
+        $loginString = self::escapeSQLName($login, "'");
+        $results     = DB::select("select * from pg_roles where rolname=$loginString;");
+        $userResult  = (isset($results[0]) ? $results[0] : NULL);
+        if ($userResult) $userOptions = array(
+            'LOGIN'      => $results[0]->rolcanlogin,
+            'SUPERUSER'  => $results[0]->rolsuper,
+            'CREATEROLE' => $results[0]->rolcreaterole,
+        );
+        return $userOptions;
     }
 
     public static function hasOption(array $options, string $name, $default = NULL)
@@ -80,21 +98,26 @@ class PostGreSQLManager {
         return $userExists;
     }
 
-    public static function upCreateDBUser(string $login, string $password, ?bool $withCreateRole = FALSE, ?bool $asSuperUser = FALSE, ?bool $withGrantOption = FALSE, ?array $options = array()): bool
+    public static function upCreateDBUser(string $login, string|NULL $password = NULL, ?bool $withCreateRole = FALSE, ?bool $asSuperUser = FALSE, ?bool $withGrantOption = FALSE, ?array $options = array()): bool
     {
+        // Update or Create the DB user
         $database       = self::configDatabase('database');
         $databaseName   = self::escapeSQLName($database);
         $loginName      = self::escapeSQLName($login);
-        $passwordString = self::escapeSQLName($password, "'");
-        $loginString    = self::escapeSQLName($login,    "'");
-        $createrole     = ($withCreateRole ? 'CREATEROLE' : '');
-        $superuser      = ($asSuperUser    ? 'SUPERUSER'  : '');
+        // Attributes
+        $passwordString = ($password       ? 'PASSWORD ' . self::escapeSQLName($password, "'") : '');
+        $attCreaterole  = ($withCreateRole ? 'CREATEROLE' : '');
+        $attSuperuser   = ($asSuperUser    ? 'SUPERUSER'  : '');
+        $attLogin       = 'LOGIN';
 
         $exists  = self::userExists($login);
         $command = ($exists ? 'ALTER' : 'CREATE'); 
-        DB::unprepared("$command USER $loginName WITH $createrole $superuser PASSWORD $passwordString;");
+        if (!$exists && !$password) throw new Exception("Cannot create user $loginName without a DB password");
+        DB::unprepared("$command USER $loginName WITH $attCreaterole $attSuperuser $attLogin $passwordString;");
 
+        // $options come from the DatabaseAuthorisation <form>
         // TODO: This is too much access! Let's reduce it
+        // Maybe use a clone user
         $withgrant = ($withGrantOption ? 'WITH GRANT OPTION' : '');
         if (self::hasOption($options, 'grant_database_usage') && $database) 
             DB::unprepared("GRANT ALL ON DATABASE $databaseName TO $loginName $withgrant;");

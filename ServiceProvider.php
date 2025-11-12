@@ -7,6 +7,7 @@ use DBAuth\PostGreSQLManager as DBManager;
 use DBAuth\Models\Settings;
 use BackendAuth;
 use Event;
+use Flash;
 use DB;
 use File;
 use Lang;
@@ -252,17 +253,27 @@ class ServiceProvider extends ModuleServiceProvider
     {
         // Translate errors
         $exceptionMessage = NULL;
+        $resolution       = NULL;
         if ($ex) {
+            $serverMessage = $ex->getMessage();
+            $subCode       = (isset($ex->errorInfo[0]) ? $ex->errorInfo[0] : NULL);
             switch ($ex->getCode()) {
-                case 7: // Password authentication failed
-                    $exceptionMessage = Lang::get('dbauth::lang.errors.auth_failed');
+                case 7:     // Password authentication failed or not permitted to log in
+                    if (strstr($serverMessage, 'not permitted to log in')) {
+                        $exceptionMessage = Lang::get('dbauth::lang.errors.login_not_permitted');
+                        $resolution       = 'ALTER ROLE <user> WITH LOGIN;';
+                    } else {
+                        $exceptionMessage = Lang::get('dbauth::lang.errors.password_auth_failed');
+                        $resolution       = 'ALTER ROLE <user> WITH PASSWORD \'<correct password>\';';
+                    }
                     break;
-                case 42501: // Insufficient privilege: 7 ERROR:  permission denied to create role
-                    $exceptionMessage = trans('dbauth::lang.errors.create_role_required');
+                case 42501: // Insufficient privilege: 7 ERROR: permission denied to create token_%id role
+                    $exceptionMessage = Lang::get('dbauth::lang.errors.create_role_required');
                     break;
-                default:
-                    $exceptionMessage = $ex->getMessage();
+                default:    // Generic response to not reveal info
+                    $exceptionMessage = Lang::get('dbauth::lang.errors.generic_access_denied');
             }
+            if (env('APP_DEBUG')) $exceptionMessage .= ": $serverMessage $resolution";
         }   
 
         if ($this->app->runningInConsole()) {
@@ -365,15 +376,17 @@ class ServiceProvider extends ModuleServiceProvider
     {
         $hints = array();
 
-        $username  = DBManager::configDatabase('username');
-        $password  = DBManager::configDatabase('password');
+        $username      = DBManager::configDatabase('username');
+        $password      = DBManager::configDatabase('password');
         
         if ($username != '<DBAUTH>' || $password != '<DBAUTH>')
             $hints['hint_not_setup'] = [
-                'label'   => '',
-                'tab'     => self::$tab,
-                'type'    => 'partial',
-                'path'    => "hint_not_setup",
+                'label'    => '',
+                'tab'      => self::$tab,
+                'type'     => 'partial',
+                'path'     => "hint_not_setup",
+                'span'     => 'storm',
+                'cssClass' => 'col-xs-4',
                 'permissions' => array('dbauth.setup_user'),
             ];
 
@@ -382,28 +395,54 @@ class ServiceProvider extends ModuleServiceProvider
             && strstr($password, 'Poo')  !== FALSE
         )
             $hints['hint_dev_setup'] = [
-                'label'   => '',
-                'tab'     => self::$tab,
-                'type'    => 'partial',
-                'path'    => "hint_dev_setup",
+                'label'    => '',
+                'tab'      => self::$tab,
+                'type'     => 'partial',
+                'path'     => "hint_dev_setup",
+                'span'     => 'storm',
+                'cssClass' => 'col-xs-4',
                 'permissions' => array('dbauth.setup_user'),
             ];
 
         if ($user->exists) {
             if (DBManager::userExists($user->login)) {
                 $hints['hint_db_user'] = [
-                    'label'   => '',
-                    'tab'     => self::$tab,
-                    'type'    => 'partial',
-                    'path'    => "hint_db_user",
+                    'label'    => '',
+                    'tab'      => self::$tab,
+                    'type'     => 'partial',
+                    'path'     => "hint_db_user",
+                    'span'     => 'storm',
+                    'cssClass' => 'col-xs-4',
+                    'permissions' => array('dbauth.setup_user'),
+                ];
+                // Double check options
+                $dbUserAttributes = DBManager::dbUserAttributes($user->login);
+                if (!$dbUserAttributes['LOGIN']) $hints['hint_db_user_login'] = [
+                    'label'    => '',
+                    'tab'      => self::$tab,
+                    'type'     => 'partial',
+                    'path'     => "hint_db_user_login",
+                    'span'     => 'storm',
+                    'cssClass' => 'col-xs-4',
+                    'permissions' => array('dbauth.setup_user'),
+                ];
+                if (!$dbUserAttributes['CREATEROLE']) $hints['hint_db_user_createrole'] = [
+                    'label'    => '',
+                    'tab'      => self::$tab,
+                    'type'     => 'partial',
+                    'path'     => "hint_db_user_createrole",
+                    'span'     => 'storm',
+                    'cssClass' => 'col-xs-4',
                     'permissions' => array('dbauth.setup_user'),
                 ];
             } else {
                 $hints['hint_no_db_user'] = [
-                    'label'   => '',
-                    'tab'     => self::$tab,
-                    'type'    => 'partial',
-                    'path'    => "hint_no_db_user",
+                    'label'    => '',
+                    'tab'      => self::$tab,
+                    'type'     => 'partial',
+                    'path'     => "hint_no_db_user",
+                    'span'     => 'storm',
+                    'cssClass' => 'col-xs-4',
                     'permissions' => array('dbauth.setup_user'),
                 ];
             }
@@ -428,20 +467,18 @@ class ServiceProvider extends ModuleServiceProvider
             $autoCreateUser  = (Settings::get('auto_create_db_user') == '1');
 
             if ($isSyncing && $autoCreateUser) {
-                if ($password) {
-                    try {
-                        // Will also try to sync the password if the user already exists
-                        $created = DBManager::upCreateDBUser(
-                            $user->login, 
-                            $password, 
-                            $roleCreate,
-                            $user->is_superuser,
-                            $withGrantOption,
-                            $purgeValues
-                        );
-                    } catch (QueryException $ex) {
-                        throw new ApplicationException($ex->getMessage());
-                    }
+                try {
+                    // Will also try to sync the password if the user already exists
+                    $created = DBManager::upCreateDBUser(
+                        $user->login, 
+                        $password, // Can be empty. Will still work if ALTER NOT CREATE
+                        $roleCreate,
+                        $user->is_superuser,
+                        $withGrantOption,
+                        $purgeValues
+                    );
+                } catch (QueryException $ex) {
+                    throw new ApplicationException($ex->getMessage());
                 }
             } else {
                 DBManager::checkDropDBUser($user->login);
