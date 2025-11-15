@@ -7,7 +7,7 @@ use DBAuth\PostGreSQLManager as DBManager;
 use DBAuth\Models\Settings;
 use BackendAuth;
 use Event;
-use Flash;
+use Exception;
 use DB;
 use File;
 use Lang;
@@ -123,9 +123,14 @@ class ServiceProvider extends ModuleServiceProvider
             // TODO: Should this test be only APP_DEBUG?
             try {
                 // Force reconnect to trigger the pgsql extend above
+                // We use winter_translate_attributes because it is necessary for frontend default user
+                // and we want to catch any problems it might have
                 if ($this->app->runningInConsole()) DB::reconnect();
-                DB::unprepared("select 1");
+                DB::unprepared("select 1 from winter_translate_messages limit 1");
             } catch (QueryException $ex) {
+                // If it is running in the front-end
+                // then showLoginScreen() will simply throw the exception
+                // but with good details if APP_DEBUG
                 $this->showLoginScreen(NULL, $ex);
             }
         }
@@ -273,7 +278,11 @@ class ServiceProvider extends ModuleServiceProvider
                 default:    // Generic response to not reveal info
                     $exceptionMessage = Lang::get('dbauth::lang.errors.generic_access_denied');
             }
-            if (env('APP_DEBUG')) $exceptionMessage .= ": $serverMessage $resolution";
+            if (env('APP_DEBUG')) {
+                $exceptionMessage .= ": $serverMessage $resolution";
+                $connConfig        = DB::connection()->getConfig();
+                $exceptionMessage .= " Connecting as user $connConfig[username] with password [$connConfig[password]]";
+            }
         }   
 
         if ($this->app->runningInConsole()) {
@@ -321,6 +330,9 @@ class ServiceProvider extends ModuleServiceProvider
                 // The login will fail if not
                 $config['username'] = 'frontend';
                 $config['password'] = 'Fvv%#6nDFbR23';
+
+                // We have a system issue if frontend cannot access the database
+                if ($ex) throw new Exception($exceptionMessage);
             }
         }
 
