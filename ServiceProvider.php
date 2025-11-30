@@ -11,6 +11,7 @@ use Exception;
 use DB;
 use File;
 use Lang;
+use Auth;
 use Backend\Controllers\Users;
 use System\Classes\SettingsManager;
 use Winter\Storm\Support\ModuleServiceProvider;
@@ -332,7 +333,10 @@ class ServiceProvider extends ModuleServiceProvider
                 $config['password'] = 'Fvv%#6nDFbR23';
 
                 // We have a system issue if frontend cannot access the database
-                if ($ex) throw new Exception($exceptionMessage);
+                if ($ex) {
+                    // throw new Exception($exceptionMessage);
+                    Auth::logout();
+                }
             }
         }
 
