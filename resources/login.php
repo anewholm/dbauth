@@ -38,6 +38,19 @@
                 display:block;
                 opacity:1;
             }
+            body.outer .layout > .layout-row > .layout-cell .outer-form-container {
+                /* Larger inputs in laptop mode */
+                width: 650px
+            }
+            @media (max-width: 768px) {
+                /* Larger inputs in mobile mode */
+                body.outer .layout > .layout-row > .layout-cell .outer-form-container {
+                    width: 382px;
+                }
+                body.outer .layout > .layout-row > .layout-cell .outer-form-container .horizontal-form button {
+                    width: 100%!important;
+                }
+            }
         </style>
     </head>
 
@@ -46,7 +59,7 @@
             <div class="layout">
                 <div class="layout-row min-size layout-head">
                     <div class="layout-cell">
-                        <h1>Secure System</h1>
+                        <h1>Secure System | نظام آمن | Sîstema Ewle</h1>
                     </div>
                 </div>
 
@@ -65,9 +78,9 @@
                                             name="login"
                                             value=""
                                             class="form-control icon user"
-                                            placeholder="login"
+                                            placeholder="Username | Nav | اسم المستخدم"
                                             autocomplete="off"
-                                            maxlength="255" />
+                                        />
 
                                         <!-- Password -->
                                         <input
@@ -75,13 +88,15 @@
                                             name="password"
                                             value=""
                                             class="form-control icon lock"
-                                            placeholder="password"
+                                            placeholder="كلمة المرور | Şîfre | Password"
                                             autocomplete="off"
-                                            maxlength="255" />
+                                        />
 
                                         <!-- Submit Login -->
                                         <button type="submit" class="btn btn-primary login-button">
-                                            Login
+                                            تسجيل الدخول 
+                                            | Têketin 
+                                            | Login
                                         </button>
                                     </div>
 
@@ -89,8 +104,12 @@
                                     <p class="wn-icon-lock pull-right forgot-password">
                                         <!-- Forgot your password? -->
                                         <a name="/backend/backend/auth/restore" class="text-muted">
-                                            Forgot your password?<br/>
+                                            نسيت كلمة السر؟ 
+                                            | Şîfreya xwe ji bîr kir? 
+                                            | Forgot your password?<br/>
                                             Please talk with a Systems Administrator.
+                                            | Ji kerema xwe bi rêveberekî sîsteman re bipeyivin.
+                                            | يرجى التحدث مع مسؤول النظام.
                                         </a>
                                     </p>
                                 </div>

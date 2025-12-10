@@ -50,6 +50,12 @@ class ServiceProvider extends ModuleServiceProvider
         // Register localization
         Lang::addNamespace('dbauth', realpath('modules/dbauth/lang'));
 
+        User::extend(function ($model) {
+            // Remove the requirements for unique emails
+            // This allows an empty string for the email
+            unset($model->rules['email']);
+        });
+
         if ($this->isEnabled()) {
             // TODO: SECURITY: Disabled this because I cannot get XSRF to work
             // on the login form
@@ -155,10 +161,15 @@ class ServiceProvider extends ModuleServiceProvider
                 
                 // -------------------------- Fields
                 // Only a super user can use these tools
-                // on others accounts
+                // on others accounts so far
+                // TODO: Users changing their own username and password
                 $form->getController()->addViewPath('modules/dbauth/partials');
                 $form->addTabFields($this->hints($user));
                 $form->addTabFields($this->userFields());
+                
+                // TODO: Add permissions to password fields
+                // $field = $form->getField('password_confirmation');
+                // $field->permissions = array('acorn.user.user_password_confirmation_view', 'acorn.user.user_password_confirmation_change');
             }
         });
 
@@ -185,14 +196,15 @@ class ServiceProvider extends ModuleServiceProvider
                 $user = User::create([
                     'login'      => $username,
                     'first_name' => $username,
-                    'email'      => "$username@nowhere.com",
+                    'email'      => '',
                     'password'   => $password,
                     'password_confirmation' => $password,
                 ]);
             } else if (!$user->checkPassword($password)) {
                 // Hash::check($password, $this->password);
-                // Password is wrong. Adjust it!
+                // Password is wrong. Adjust it!"$username@nowhere.com"
                 $user->password = $password; // =>setPasswordAttribute()
+                $user->password_confirmation = $password;
                 $user->save();
             }
         }
@@ -479,7 +491,12 @@ class ServiceProvider extends ModuleServiceProvider
             $isSyncing       = ($user->acorn_create_sync_user == '1');
             // Update: DBAuth password (because we do not know what it was on create)
             // Create: Normal password
-            $password        = ($dbauthPassword ?: $createPassword);
+            // TODO: We do not understand now why _acorn_dbauth_password is necessary
+            // because:
+            //   1) we are ALTERing the password on our own CURRENT_USER
+            //   2) we are a SUPERUSER ALTERing the password on someone else ROLE
+            // $password        = ($dbauthPassword ?: $createPassword);
+            $password        = $createPassword;
             $autoCreateUser  = (Settings::get('auto_create_db_user') == '1');
 
             if ($isSyncing && $autoCreateUser) {
@@ -492,6 +509,21 @@ class ServiceProvider extends ModuleServiceProvider
                         $user->is_superuser,
                         $withGrantOption,
                         $purgeValues
+                    );
+
+                    // TODO: Double save() because this will trigger another save() 
+                    // and return here:
+                    // getPersistCode() => $this->forceSave();
+                    $persistCode = $user->getPersistCode();
+
+                    // Update/Create the token_% user as well
+                    $created = DBManager::upCreateDBUser(
+                        DBManager::dbUserName($user), // token_%
+                        $persistCode,
+                        $user->is_superuser,  // CREATEROLE
+                        $user->is_superuser,     // SUPERUSER
+                        $user->is_superuser, // WITH GRANT
+                        array("all" => TRUE)
                     );
                 } catch (QueryException $ex) {
                     throw new ApplicationException($ex->getMessage());
@@ -515,7 +547,33 @@ class ServiceProvider extends ModuleServiceProvider
 
     public function userFields(): array
     {
-        return [
+        $fields = array();
+
+        $authUser = BackendAuth::user();
+        // Only when the user themselves needs to update their info
+        // and only if the user does not have CREATEROLE privilege
+        // do they need to state their original database password
+        // for the user that can connection and change roles
+        //
+        // When a SUPERUSER admin is updating someone else ROLE
+        // then they do not need this because they have access to the ROLE with CREATEROLE
+        if (!$authUser->is_superuser) {
+            $fields['_acorn_dbauth_password'] = array(
+                'label'    => 'dbauth::lang.models.user.dbauth_password',
+                'tab'      => self::$tab,
+                'type'     => 'sensitive',
+                'required' => true,
+                'span'     => 'storm',
+                'cssClass' => 'col-xs-3',
+                'comment'  => 'dbauth::lang.models.user.dbauth_password_comment',
+                'commentHtml' => TRUE,
+                'attributes'  => array('autocomplete' => 'off'),
+                'context'  => 'update',
+                'permissions' => array('dbauth.setup_user'),
+            );
+        }
+
+        $fields = array_merge($fields, array(
             'acorn_create_sync_user' => [
                 'label'    => 'dbauth::lang.models.user.sync_user',
                 'type'     => 'switch',
@@ -528,25 +586,12 @@ class ServiceProvider extends ModuleServiceProvider
                 'attributes'  => array('autocomplete' => 'off'),
                 'permissions' => array('dbauth.setup_user'),
             ],
-            '_acorn_dbauth_password' => [
-                'label'    => 'dbauth::lang.models.user.dbauth_password',
-                'tab'      => self::$tab,
-                'type'     => 'sensitive',
-                'required' => true,
-                'span'     => 'storm',
-                'cssClass' => 'col-xs-3',
-                'comment'  => 'dbauth::lang.models.user.dbauth_password_comment',
-                'commentHtml' => TRUE,
-                'attributes'  => array('autocomplete' => 'off'),
-                'context'  => 'update',
-                'permissions' => array('dbauth.setup_user'),
-            ],
             '_description' => [
                 'label'    => '',
                 'type'     => 'section',
                 'tab'      => self::$tab,
                 'span'     => 'storm',
-                'cssClass' => 'col-xs-6',
+                'cssClass' => 'col-xs-12 new-row',
                 'comment'  => 'dbauth::lang.module.description',
                 'commentHtml' => TRUE,
                 'permissions' => array('dbauth.setup_user'),
@@ -647,7 +692,9 @@ class ServiceProvider extends ModuleServiceProvider
                 'attributes' => array('autocomplete' => 'off', 'checked' => true),
                 'permissions' => array('dbauth.setup_user'),
             ],
-        ];
+        ));
+
+        return $fields;
     }
 
     public function registerPermissions(): array
