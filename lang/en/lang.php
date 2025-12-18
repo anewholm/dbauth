@@ -38,8 +38,8 @@
         'user' => [
             'sync_user' => 'Create and synchronise DB user',
             'sync_user_comment' => 'This includes password changes.',
-            'dbauth_password' => 'Current DB Password for updates',
-            'dbauth_password_comment' => 'Required for <i>update</i> because DBAuth cannot know the original user (+GRANT) password. When changing the password, this must be the old DB password',
+            'dbauth_password' => 'Old Password',
+            'dbauth_password_comment' => 'Required for password updates only. Contact the administrator if you cannot remember your old password',
             'rolecreate' => 'Allow user to create session sub-role: token_%id',
             'rolecreate_comment' => 'This sub-role is used for general Database sessions after initial login with the main role.',
             'withgrantoption' => 'Grant the privileges selected below to token_%id',
@@ -58,6 +58,7 @@
             'grant_functions_all' => 'All Functions privileges',
             'login_fixed' => 'Change of login is not possible with this system',
             'email_optional' => 'Email is optional with this system, but must be unique if set',
+            'failed_login' => 'Failed to login with this password',
         ],
         'settings' => [
             'auto_create_backend_user' => 'Auto-Create the backend_users record',
