@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Config;
 use BackendAuth;
 use Exception;
 use Backend\Models\User;
+use function False\tRUE;
 
 class PostGreSQLManager {
     public static function configDatabase(?string $key): array|string
@@ -20,23 +21,20 @@ class PostGreSQLManager {
         return $results[0]->current_user;
     }
 
-    public static function dbUserName(User $user = NULL): string
-    {
-        if (is_null($user)) $user = BackendAuth::user();
-        return "token_$user->id";
-    }
-    
     public static function escapeSQLName(string $name, ?string $quote = '"'): string
     {
         $name  = preg_replace("/(['\"])/", '\\\$1', $name);
         return "$quote$name$quote"; 
     }
 
-    public static function userExists(string $login): bool
+    public static function dbUserExists(string|NULL $login): bool
     {
         // TODO: Prepare statement for DB::select
         $loginString = self::escapeSQLName($login, "'");
-        return (bool) DB::select("SELECT 1 FROM pg_roles WHERE rolname=$loginString;");
+        return (bool) ($login 
+            ? DB::select("SELECT 1 FROM pg_roles WHERE rolname=$loginString;")
+            : TRUE
+        );
     }
 
     public static function dbUserAttributes(string $login): array|bool
@@ -71,7 +69,7 @@ class PostGreSQLManager {
         $database       = self::configDatabase('database');
         $databaseName   = self::escapeSQLName($database);
         $loginName      = self::escapeSQLName($login);
-        $userExists     = self::userExists($login);
+        $userExists     = self::dbUserExists($login);
         if ($userExists) {
             DB::unprepared("REVOKE ALL ON ALL FUNCTIONS IN schema public from $loginName CASCADE;");
             DB::unprepared("REVOKE ALL ON ALL SEQUENCES IN schema public from $loginName CASCADE;");
@@ -90,7 +88,7 @@ class PostGreSQLManager {
         $databaseName   = self::escapeSQLName($database);
         $loginName      = self::escapeSQLName($login);
         $loginString    = self::escapeSQLName($login, "'");
-        $userExists     = self::userExists($login);
+        $userExists     = self::dbUserExists($login);
         if ($userExists) {
             self::revokeAllPrivileges($login);
             DB::unprepared("DROP USER if exists $loginName;");
@@ -98,38 +96,78 @@ class PostGreSQLManager {
         return $userExists;
     }
 
-    public static function upCreateDBUser(string $login, string|NULL $password = NULL, ?bool $withCreateRole = FALSE, ?bool $asSuperUser = FALSE, ?bool $withGrantOption = FALSE, ?array $options = array()): bool
+    public static function updatePassword(string $password, string|NULL $login = NULL): bool
     {
-        // Update or Create the DB user
+        // NULL $login = CURRENT_USER
+        $loginName      = (is_null($login) ? 'CURRENT_USER' : self::escapeSQLName($login));
+        $passwordString = self::escapeSQLName($password, "'");
+
+        $exists = ($login ? self::dbUserExists($login) : TRUE);
+        if (!$exists)   throw new Exception("User $loginName does not exist");
+        if (!$password) throw new Exception("$password is blank");
+
+        $sql     = "ALTER USER $loginName WITH PASSWORD $passwordString;";
+        DB::unprepared($sql);
+
+        return TRUE;
+    }
+
+    public static function makeSUPERUSER(string|NULL $login = NULL): bool
+    {
+        // NULL $login = CURRENT_USER
+        $loginName = (is_null($login) ? 'CURRENT_USER' : self::escapeSQLName($login));
+        $sql       = "ALTER USER $loginName WITH SUPERUSER;";
+        DB::unprepared($sql);
+        return TRUE;
+    }
+    
+    public static function clearSUPERUSER(string|NULL $login = NULL): bool
+    {
+        // NULL $login = CURRENT_USER
+        $loginName = (is_null($login) ? 'CURRENT_USER' : self::escapeSQLName($login));
+        $sql       = "ALTER USER $loginName WITH NOSUPERUSER;";
+        DB::unprepared($sql);
+        return TRUE;
+    }
+
+    public static function createDBUser(string $login, string $password, bool $asSuperUser = FALSE, array|NULL $options = NULL, array|NULL $associateUsers = NULL): bool
+    {
         $database       = self::configDatabase('database');
         $databaseName   = self::escapeSQLName($database);
         $loginName      = self::escapeSQLName($login);
         // Attributes
         $passwordString = ($password       ? 'PASSWORD ' . self::escapeSQLName($password, "'") : '');
-        $attCreaterole  = ($withCreateRole ? 'CREATEROLE' : '');
         $attSuperuser   = ($asSuperUser    ? 'SUPERUSER'  : '');
-        $attLogin       = 'LOGIN';
 
-        $exists  = self::userExists($login);
-        $command = ($exists ? 'ALTER' : 'CREATE'); 
-        if (!$exists && !$password) throw new Exception("Cannot create user $loginName without a DB password");
-        DB::unprepared("$command USER $loginName WITH $attCreaterole $attSuperuser $attLogin $passwordString;");
+        $sql            = "CREATE USER $loginName WITH LOGIN CREATEROLE $attSuperuser $passwordString;";
+        DB::unprepared($sql);
+
+        if ($associateUsers) {
+            foreach ($associateUsers as $fromLogin) {
+                // PostGreSQL requires CREATEROLE and ADMIN option to manage each other
+                try {
+                    DB::unprepared("GRANT $fromLogin TO $login WITH ADMIN OPTION;");
+                } catch (Exception $ex) {
+                    // ADMIN option is likely to already be granted
+                }
+            }
+        }
 
         // $options come from the DatabaseAuthorisation <form>
         // TODO: This is too much access! Let's reduce it
         // Maybe use a clone user
-        $withgrant = ($withGrantOption ? 'WITH GRANT OPTION' : '');
+        $withgrant = ''; // WITH GRANT OPTION
         if (self::hasOption($options, 'grant_database_usage') && $database) 
-            DB::unprepared("GRANT ALL ON DATABASE $databaseName TO $loginName $withgrant;");
+            DB::unprepared("GRANT ALL ON DATABASE $databaseName TO $loginName;");
         if (self::hasOption($options, 'grant_schema_usage')) 
-            DB::unprepared("GRANT ALL ON SCHEMA public TO $loginName $withgrant;");
+            DB::unprepared("GRANT ALL ON SCHEMA public TO $loginName;");
         if (self::hasOption($options, 'grant_tables_all')) 
-            DB::unprepared("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $loginName $withgrant;");
+            DB::unprepared("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $loginName;");
         if (self::hasOption($options, 'grant_sequences_all')) 
-            DB::unprepared("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $loginName $withgrant;");
+            DB::unprepared("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $loginName;");
         if (self::hasOption($options, 'grant_functions_all')) 
-            DB::unprepared("GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO $loginName $withgrant;");
+            DB::unprepared("GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO $loginName;");
 
-        return !$exists;
+        return TRUE;
     }
 }

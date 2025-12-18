@@ -1,7 +1,7 @@
 <?php  
-use DBAuth\PostGreSQLManager as DBManager;
+use DBAuth\ServiceProvider;
 
-$dbUser = DBManager::dbUserName($formModel);
+$dbUser = ServiceProvider::tokenLoginName($formModel);
 ?>
 <div class="layout-row min-size">
     <div class="callout callout-info">
