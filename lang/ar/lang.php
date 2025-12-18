@@ -34,8 +34,8 @@
         'user' => [
             'sync_user' => 'Create and synchronise DB user',
             'sync_user_comment' => 'This includes password changes.',
-            'dbauth_password' => 'Current DB Password for updates',
-            'dbauth_password_comment' => 'Required for <i>update</i> because DBAuth cannot know the original user (+GRANT) password. When changing the password, this must be the old DB password',
+            'dbauth_password' => 'كلمة المرور القديمة',
+            'dbauth_password_comment' => 'مطلوب لتحديث كلمة المرور فقط. تواصل مع المسؤول إذا لم تتذكر كلمة مرورك القديمة.',
             'rolecreate' => 'Allow user to create session sub-role: token_%id',
             'rolecreate_comment' => 'This sub-role is used for general Database sessions after initial login with the main role.',
             'withgrantoption' => 'Grant the privileges selected below to token_%id',
@@ -54,6 +54,7 @@
             'grant_functions_all' => 'All Functions privileges',
             'login_fixed' => 'لا يمكن تغيير بيانات تسجيل الدخول في هذا النظام',
             'email_optional' => 'البريد الإلكتروني اختياري في هذا النظام، ولكن يجب أن يكون فريدًا إذا تم تعيينه.',
+            'failed_login' => 'فشل تسجيل الدخول باستخدام كلمة المرور هذه',
         ],
         'settings' => [
             'auto_create_backend_user' => 'Auto-Create the backend_users record',

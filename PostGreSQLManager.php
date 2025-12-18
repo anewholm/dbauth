@@ -2,13 +2,11 @@
 
 use DB;
 use Illuminate\Support\Facades\Config;
-use BackendAuth;
 use Exception;
-use Backend\Models\User;
-use function False\tRUE;
+use Illuminate\Database\Connectors\ConnectionFactory;
 
 class PostGreSQLManager {
-    public static function configDatabase(?string $key): array|string
+    public static function configDatabase(string|NULL $key = NULL): array|string
     {
         $conn   = Config::get('database.default');
         $config = Config::get("database.connections.$conn");
@@ -25,6 +23,11 @@ class PostGreSQLManager {
     {
         $name  = preg_replace("/(['\"])/", '\\\$1', $name);
         return "$quote$name$quote"; 
+    }
+
+    public static function escapeSQLValue(string $name, ?string $quote = "'"): string
+    {
+        return self::escapeSQLName($name, $quote); 
     }
 
     public static function dbUserExists(string|NULL $login): bool
@@ -47,9 +50,9 @@ class PostGreSQLManager {
         $results     = DB::select("select * from pg_roles where rolname=$loginString;");
         $userResult  = (isset($results[0]) ? $results[0] : NULL);
         if ($userResult) $userOptions = array(
-            'LOGIN'      => $results[0]->rolcanlogin,
-            'SUPERUSER'  => $results[0]->rolsuper,
-            'CREATEROLE' => $results[0]->rolcreaterole,
+            'LOGIN'      => $userResult->rolcanlogin,
+            'SUPERUSER'  => $userResult->rolsuper,
+            'CREATEROLE' => $userResult->rolcreaterole,
         );
         return $userOptions;
     }
@@ -64,8 +67,17 @@ class PostGreSQLManager {
         return ($all || $specific);
     }
 
-    public static function revokeAllPrivileges(string $login): bool
+    public static function revokeAllDBPrivileges(string $login): bool
     {
+        /*
+        REVOKE ALL ON ALL FUNCTIONS IN schema public from "token_8_no" CASCADE;
+        REVOKE ALL ON ALL SEQUENCES IN schema public from "token_8_no" CASCADE;
+        REVOKE ALL ON ALL TABLES IN schema public from "token_8_no" CASCADE;
+        REVOKE ALL ON schema public from "token_8_no" CASCADE;
+        REVOKE ALL ON database "justice" from "token_8_no" CASCADE;
+        REASSIGN OWNED BY "token_8_no" TO postgres;
+        drop user "token_8_no"
+        */
         $database       = self::configDatabase('database');
         $databaseName   = self::escapeSQLName($database);
         $loginName      = self::escapeSQLName($login);
@@ -84,19 +96,16 @@ class PostGreSQLManager {
     public static function checkDropDBUser(string $login): bool
     {
         // Delete DB User Completely
-        $database       = self::configDatabase('database');
-        $databaseName   = self::escapeSQLName($database);
         $loginName      = self::escapeSQLName($login);
-        $loginString    = self::escapeSQLName($login, "'");
         $userExists     = self::dbUserExists($login);
         if ($userExists) {
-            self::revokeAllPrivileges($login);
+            self::revokeAllDBPrivileges($login);
             DB::unprepared("DROP USER if exists $loginName;");
         }
         return $userExists;
     }
 
-    public static function updatePassword(string $password, string|NULL $login = NULL): bool
+    public static function updateDBPassword(string $password, string|NULL $login = NULL, string|NULL $oldPassword = NULL): bool
     {
         // NULL $login = CURRENT_USER
         $loginName      = (is_null($login) ? 'CURRENT_USER' : self::escapeSQLName($login));
@@ -106,8 +115,22 @@ class PostGreSQLManager {
         if (!$exists)   throw new Exception("User $loginName does not exist");
         if (!$password) throw new Exception("$password is blank");
 
-        $sql     = "ALTER USER $loginName WITH PASSWORD $passwordString;";
-        DB::unprepared($sql);
+        if ($oldPassword) {
+            // Connect as the target user
+            $config = self::configDatabase();
+            $config['username'] = $login;
+            $config['password'] = $oldPassword;
+            $connFactory = new ConnectionFactory(app());
+            $db2 = $connFactory->make($config);
+
+            // Run the CURRENT_USER update
+            $sql = "ALTER USER CURRENT_USER WITH PASSWORD $passwordString;";
+            $db2->unprepared($sql);
+            $db2->disconnect();
+        } else {
+            $sql = "ALTER USER $loginName WITH PASSWORD $passwordString;";
+            DB::unprepared($sql);
+        }
 
         return TRUE;
     }
@@ -130,23 +153,29 @@ class PostGreSQLManager {
         return TRUE;
     }
 
-    public static function createDBUser(string $login, string $password, bool $asSuperUser = FALSE, array|NULL $options = NULL, array|NULL $associateUsers = NULL): bool
+    public static function createDBUser(string $login, string $password, bool $asSuperUser = FALSE, bool $withCreateRole = FALSE, array|NULL $options = NULL, array|NULL $associateUsers = NULL): bool
     {
         $database       = self::configDatabase('database');
         $databaseName   = self::escapeSQLName($database);
         $loginName      = self::escapeSQLName($login);
         // Attributes
-        $passwordString = ($password       ? 'PASSWORD ' . self::escapeSQLName($password, "'") : '');
-        $attSuperuser   = ($asSuperUser    ? 'SUPERUSER'  : '');
+        $passwordName   = self::escapeSQLValue($password);
+        $passwordAtt    = ($password       ? "PASSWORD $passwordName"  : '');
+        $attSuperuser   = ($asSuperUser    ? 'SUPERUSER'   : '');
+        $attCreateRole  = ($withCreateRole ? 'CREATEROLE'  : '');
 
-        $sql            = "CREATE USER $loginName WITH LOGIN CREATEROLE $attSuperuser $passwordString;";
+        $sql            = "CREATE USER $loginName WITH LOGIN $attCreateRole $attSuperuser $passwordAtt;";
         DB::unprepared($sql);
 
         if ($associateUsers) {
             foreach ($associateUsers as $fromLogin) {
                 // PostGreSQL requires CREATEROLE and ADMIN option to manage each other
+                // This is used so that:
+                //   the normal user can update the token_% user password 
+                //   to the new persist_code during login
+                $fromLoginName = self::escapeSQLName($fromLogin);
                 try {
-                    DB::unprepared("GRANT $fromLogin TO $login WITH ADMIN OPTION;");
+                    DB::unprepared("GRANT $loginName TO $fromLoginName WITH ADMIN OPTION;");
                 } catch (Exception $ex) {
                     // ADMIN option is likely to already be granted
                 }
@@ -154,9 +183,8 @@ class PostGreSQLManager {
         }
 
         // $options come from the DatabaseAuthorisation <form>
-        // TODO: This is too much access! Let's reduce it
-        // Maybe use a clone user
-        $withgrant = ''; // WITH GRANT OPTION
+        // TODO: This is too much DB GRANT access! Let's reduce it
+        // TODO: Maybe use a clone user for DB GRANTS?
         if (self::hasOption($options, 'grant_database_usage') && $database) 
             DB::unprepared("GRANT ALL ON DATABASE $databaseName TO $loginName;");
         if (self::hasOption($options, 'grant_schema_usage')) 

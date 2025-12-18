@@ -11,8 +11,9 @@ use Exception;
 use DB;
 use File;
 use Lang;
-use Auth;
+use Flash;
 use Backend\Controllers\Users;
+use SebastianBergmann\Type\VoidType;
 use System\Classes\SettingsManager;
 use Winter\Storm\Support\ModuleServiceProvider;
 use Illuminate\Database\Connectors\ConnectionFactory;
@@ -45,13 +46,20 @@ class ServiceProvider extends ModuleServiceProvider
         return (isset($input['login']) && isset($input['password']));
     }
 
-    public static function tokenLoginName(User $user): string
+    public static function tokenLoginName(User $backendUser): string
     {
-        if (!$user->id)
-            throw new Exception('User not exists yet during tokenLoginName()');
-        return "token_$user->id";
+        if (is_null($backendUser->id))
+            throw new Exception('User has no ID during tokenLoginName()');
+        return self::tokenLoginNameFromID($backendUser->id);
     }
     
+    public static function tokenLoginNameFromID(int $id): string
+    {
+        // Database is included for multiple DB servers
+        $database = DBManager::configDatabase('database');
+        return "token_{$database}_$id";
+    }
+
     public function boot()
     {
         // Register localization
@@ -70,15 +78,18 @@ class ServiceProvider extends ModuleServiceProvider
 
             // ---------------------------------------  Login control
             Event::listen('backend.user.login', function($user) {
-                // Login to database has been successful
-                // A persist-code has been generated for future connections
-                // The token_% needs to be updated for this persist code
-                // It is important that the main login has GRANT OPTION and CREATE ROLES
+                // Login to database has been successful with Normal user
+                // A new backend_users.persist_code has been generated for future connections using the token_% user
+                // The token_% password needs to be updated for this new persist code
+                // It is necessary that the normal login has GRANT OPTION and CREATEROLE on the token_%
+                // in order to make this change
+                //   GRANT agri TO token_27 WITH ADMIN OPTION => agri can change token_27
                 $success = NULL;
                 try {
                     if (Settings::get('auto_create_db_user') == '1') {
                         $tokenLoginName = self::tokenLoginName($user);
-                        $success = DBManager::updatePassword($tokenLoginName, $user->getPersistCode);
+                        $persistCode    = $user->getPersistCode();
+                        $success = DBManager::updateDBPassword($persistCode, $tokenLoginName);
                     }
                 } catch (QueryException $ex) {
                     // This will show the exception message
@@ -154,11 +165,11 @@ class ServiceProvider extends ModuleServiceProvider
                 $authUser = BackendAuth::user();
 
                 // -------------------------- onSave create|update the DB user
-                $user->bindEvent('model.beforeSave', function () use(&$user) {
-                    return $this->beforeSave($user);
-                });
                 $user->bindEvent('model.afterSave', function () use(&$user) {
                     return $this->afterSave($user);
+                });
+                $user->bindEvent('model.afterDelete', function () use(&$user) {
+                    return $this->afterDelete($user);
                 });
                 
                 // -------------------------- Fields
@@ -229,27 +240,22 @@ class ServiceProvider extends ModuleServiceProvider
         return $user;
     }
 
-    public function morphConfig(array $config): array
+    public static function getSessionAuthCookieArray(): array|NULL
     {
-        // Note $config passed by reference
-        // Return value of FALSE indicates no changes to config
-        // so username may still == <DBAUTH>
-        // causing connection failure
-        if ($this->isLoggingIn()) {
-            // Allow normal logging in process
-            $input = post();
-            $config['username'] = $input['login'];
-            $config['password'] = $input['password'];
-        } else {
-            // Get the users id and auth token
-            // from their browser client session / cookie
-            // Laravel cookies are encrypted:
-            //   EncryptCookies::decrypt(Request)
-            //   Encrypter uses openssl_decrypt()
-            //   helpers.php declares the generalised decrypt():
-            //     app('encrypter')->decrypt($value, $unserialize);
-            // Laravel decrypts the Session::* AFTER DB connection
-            // so we have to do it manually here
+        // Returns [backend_users.id, backend_users.persist_code]
+        // An auth_token is the backend_users.persist_code
+        //
+        // Get the users id and auth token
+        // from their browser client session / cookie
+        // Laravel cookies are encrypted:
+        //   EncryptCookies::decrypt(Request)
+        //   Encrypter uses openssl_decrypt()
+        //   helpers.php declares the generalised decrypt():
+        //     app('encrypter')->decrypt($value, $unserialize);
+        // Laravel decrypts the Session::* AFTER DB connection
+        // so we have to do it manually here
+        $authArray = NULL;
+        try {
             $authArray = Session::get('admin_auth');
             if (!$authArray) {
                 if ($cookieArray = Cookie::get('admin_auth')) {
@@ -265,17 +271,44 @@ class ServiceProvider extends ModuleServiceProvider
                     }
                 }
             }
+        } catch (Exception $ex) {
+            // Potentially invalid JSON 
+            // or other format problems
+            $authArray = NULL;
+        }
 
-            $hasAuthToken = (is_array($authArray) && count($authArray) == 2);
-            if ($hasAuthToken) {
+        // Validate
+        if (!is_array($authArray) || count($authArray) != 2)
+            $authArray = NULL;
+
+        // [backend_user.id, backend_users.persist_code]
+        return $authArray;
+    }
+
+    public function morphConfig(array $config): array
+    {
+        // Note $config passed by reference
+        // Return value of FALSE indicates no changes to config
+        // so username may still == <DBAUTH>
+        // causing connection failure
+        if ($this->isLoggingIn()) {
+            // Allow normal logging in process
+            $input = post();
+            $config['username'] = $input['login'];
+            $config['password'] = $input['password'];
+        } else {
+            ;
+            if ($authArray = self::getSessionAuthCookieArray()) {
                 // Note that a user with this token information
                 // will have been created at the point of token creation
                 //   Auth\Manager::setPersistCodeInSession()
                 // using the Users actual original login credentials
                 // to create the temporary user
+                // So the DB user token_% needs to use the auth_token (persist code)
+                // to login. We do not know the original password
                 [$id, $token] = $authArray;
-                $config['username'] = "token_$id";
-                $config['password'] = $token;
+                $config['username'] = self::tokenLoginNameFromID($id);
+                $config['password'] = $token; // Persist code
             }
         }
 
@@ -514,45 +547,11 @@ class ServiceProvider extends ModuleServiceProvider
         return $hints;
     }
 
-    public function beforeSave(User $aBackendUser): void
+    public function afterDelete(User $aBackendUser): void
     {
-        // See commenting on afterSave() method
-        $authUser        = BackendAuth::user();
-        $isCurrentUser   = $aBackendUser->is($authUser);
-        $canUpdateOthers = $authUser->is_superuser;
-        
-        if ($canUpdateOthers || $isCurrentUser) {
-            $purgeValues     = $aBackendUser->getOriginalPurgeValues();
-            $password        = (isset($purgeValues['password_confirmation']) && $purgeValues['password_confirmation'] ? $purgeValues['password_confirmation'] : NULL);
-            $isSyncing       = ($aBackendUser->acorn_create_sync_user == '1');
-            $tokenLogin      = self::tokenLoginName($aBackendUser); // token_%
-            $autoCreateUser  = (Settings::get('auto_create_db_user') == '1');
-
-            if ($isSyncing && $autoCreateUser) {
-                if (!$aBackendUser->exists) { 
-                    // --------------------------------------- Initial create
-                    // Normal initial login, login cannot be changed after
-                    $created = DBManager::createDBUser(
-                        $aBackendUser->login, 
-                        $password,
-                        // SUPERUSER Not necessary because token_% login is used 
-                        FALSE, 
-                        $purgeValues // GRANTS
-                    );
-
-                    // token_% based on backend_user.id. Does not change after
-                    $created = DBManager::createDBUser(
-                        $tokenLogin, 
-                        $password, 
-                        $aBackendUser->is_superuser,
-                        $purgeValues, // GRANTS
-                        // Link the users together
-                        // ADMIN OPTION on normal login for password updates
-                        array($aBackendUser->login)
-                    );
-                }
-            }
-        }
+        $tokenLogin = self::tokenLoginName($aBackendUser); // token_%
+        DBManager::checkDropDBUser($aBackendUser->login);
+        DBManager::checkDropDBUser($tokenLogin);
     }
 
     public function afterSave(User $aBackendUser): void
@@ -584,31 +583,87 @@ class ServiceProvider extends ModuleServiceProvider
         $isCurrentUser   = $aBackendUser->is($authUser);
         // Privilege to update other users? Rather than just SUPERUSER?
         $canUpdateOthers = $authUser->is_superuser;
+        $tokenLogin      = self::tokenLoginName($aBackendUser); // token_%
+
+        if ($isCurrentUser) {
+            $dbCURRENT_USER = DBManager::dbCURRENT_USER();
+            if ($aBackendUser->id != $authUser->id)
+                throw new Exception("Auth ID [$authUser->id] is not the same as the backend user ID [$aBackendUser->id] during isCurrentUser mode update");
+            if ($tokenLogin != $dbCURRENT_USER)
+                throw new Exception("DB CURRENT_USER [$dbCURRENT_USER] is not the token backend user [$tokenLogin] during isCurrentUser mode update");
+        }
         
         if ($canUpdateOthers || $isCurrentUser) {
             $purgeValues     = $aBackendUser->getOriginalPurgeValues();
-            $password        = (isset($purgeValues['password_confirmation']) && $purgeValues['password_confirmation'] ? $purgeValues['password_confirmation'] : NULL);
+            $password        = (isset($purgeValues['password_confirmation']) ? $purgeValues['password_confirmation'] : NULL);
+            $oldPassword     = (isset($purgeValues['_acorn_dbauth_password']) ? $purgeValues['_acorn_dbauth_password'] : NULL);
             $isSyncing       = ($aBackendUser->acorn_create_sync_user == '1');
-            $tokenLogin      = self::tokenLoginName($aBackendUser); // token_%
             $autoCreateUser  = (Settings::get('auto_create_db_user') == '1');
 
             if ($isSyncing && $autoCreateUser) {
+                // --------------------------------------- Initial creates
+                if (!DBManager::dbUserExists($aBackendUser->login)) {
+                    // Normal initial login, login cannot be changed after
+                    if (!$password)
+                        throw new Exception("Cannot create DB user [$aBackendUser->login] becaues initial password not provided");
+                    $created = DBManager::createDBUser(
+                        $aBackendUser->login, 
+                        $password,
+                        // SUPERUSER Not necessary because token_% login is used 
+                        FALSE, 
+                        // Needs to update token_% during login
+                        TRUE,
+                        $purgeValues // GRANTS
+                    );
+                }
+
+                if (!DBManager::dbUserExists($tokenLogin)) {
+                    // token_% based on backend_user.id. Does not change after
+                    $created = DBManager::createDBUser(
+                        $tokenLogin, 
+                        // password / persistCode updated during login above
+                        $aBackendUser->getRandomString(), 
+                        $aBackendUser->is_superuser,
+                        // Does not need to make any changes to other users
+                        FALSE,
+                        $purgeValues, // GRANTS
+                        // This will allow the token_% user to change the normal users password
+                        // CREATEROLE + ADMIN OPTION on normal login for unprivileged password updates
+                        array($aBackendUser->login)
+                    );
+                }
+
                 // --------------------------------------- Update
-                // Remember we are logged in with the token_% user, not this one
+                // Remember we are logged in with the/a token_% user, not this one
                 if ($password) {
-                    // TODO: Is using getPersistCode() necessary?
-                    // TODO: Double save() because getPersistCode() will trigger another save() 
-                    // and return here:
-                    // getPersistCode() => $this->forceSave();
-                    // $persistCode = $aBackendUser->getPersistCode();
-                    //
-                    // CURRENT_USER token_%
-                    if ($isCurrentUser) DBManager::updatePassword($password);
-                    else                DBManager::updatePassword($password, $tokenLogin);
-                    // Normal user, this requires token_% CREATEROLE and ADMIN OPTION 
-                    // on the normal role
-                    // granted above during create
-                    DBManager::updatePassword($password, $aBackendUser->login);
+                    // Password has been changed in backend_users
+                    // Update the normal DB user
+                    // We are never this user, only token_% or another (super)user
+                    // This requires SUPERUSER 
+                    // or token_% CREATEROLE and ADMIN OPTION for the CURRENT_USER on the normal role
+                    // However, we do not grant ADMIN OPTION to the token_% role
+                    // So the old password will be required in this case
+                    try {
+                        DBManager::updateDBPassword($password, $aBackendUser->login, $oldPassword);
+                    } catch(Exception $ex) {
+                        if ($oldPassword) {
+                            switch ($ex->getCode()) {
+                                case 7: // password authentication failed
+                                    $messageNice = trans('dbauth::lang.models.user.failed_login');
+                                    if (env('APP_DEBUG')) {
+                                        $message = $ex->getMessage();
+                                        $messageNice .= " $message";
+                                    }
+                                    // TODO: Maybe move this to a Flash in beforeSave()?
+                                    throw new Exception($messageNice);
+                                    break;
+                                default: 
+                                    throw $ex;
+                            }
+                        } else {
+                            throw new Exception("Password update of [$aBackendUser->login] failed. Please try again sending the old password as well");
+                        }
+                    }
                 }
 
                 if ($aBackendUser->isDirty('is_superuser')) {
@@ -651,16 +706,11 @@ class ServiceProvider extends ModuleServiceProvider
         if (!$authUser->is_superuser) {
             $fields['_acorn_dbauth_password'] = array(
                 'label'    => 'dbauth::lang.models.user.dbauth_password',
-                'tab'      => self::$tab,
                 'type'     => 'sensitive',
-                'required' => true,
-                'span'     => 'storm',
-                'cssClass' => 'col-xs-3',
+                'span'     => 'left',
                 'comment'  => 'dbauth::lang.models.user.dbauth_password_comment',
                 'commentHtml' => TRUE,
                 'attributes'  => array('autocomplete' => 'off'),
-                'context'  => 'update',
-                'permissions' => array('dbauth.setup_user'),
             );
         }
 

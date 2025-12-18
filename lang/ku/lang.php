@@ -34,8 +34,8 @@
         'user' => [
             'sync_user' => 'Create and synchronise DB user',
             'sync_user_comment' => 'This includes password changes.',
-            'dbauth_password' => 'Current DB Password for updates',
-            'dbauth_password_comment' => 'Required for <i>update</i> because DBAuth cannot know the original user (+GRANT) password. When changing the password, this must be the old DB password',
+            'dbauth_password' => 'Şîfreya Kevin',
+            'dbauth_password_comment' => 'Tenê ji bo nûvekirina şîfreyê pêwîst e. Heke hûn şîfreya xwe ya kevin bi bîr neynin, bi rêveber re têkilî daynin.',
             'rolecreate' => 'Allow user to create session sub-role: token_%id',
             'rolecreate_comment' => 'This sub-role is used for general Database sessions after initial login with the main role.',
             'withgrantoption' => 'Grant the privileges selected below to token_%id',
@@ -54,6 +54,7 @@
             'grant_functions_all' => 'All Functions privileges',
             'login_fixed' => 'Guhertina têketinê bi vê sîstemê re ne mimkûn e',
             'email_optional' => 'E-name bi vê pergalê ve bijarte ye, lê heke were danîn divê bêhempa be',
+            'failed_login' => 'Têketina bi vê şîfreyê nekarî',
         ],
         'settings' => [
             'auto_create_backend_user' => 'Auto-Create the backend_users record',
