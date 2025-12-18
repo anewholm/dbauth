@@ -17,10 +17,6 @@
         'db_user_LOGIN_comment' => 'The user will not be able to login without the LOGIN attribute. To resolve you can use ALTER USER <role name> WITH LOGIN.',
         'db_user_CREATEROLE' => 'No CREATEROLE option',
         'db_user_CREATEROLE_comment' => 'The user will not be able to create its session token_%id user without the CREATEROLE attribute. To resolve you can use ALTER USER <role name> WITH CREATEROLE.',
-        'db_super_user' => 'Database SUPERUSER',
-        'db_super_user_comment' => 'This user has a SUPERUSER privilege in the DB',
-        'db_user_ok' => 'DB User checks out',
-        'db_user_ok_comment' => 'It has both LOGIN and CREATEROLE capabilities'
     ],
     'errors' => [
         'password_auth_failed'  => 'Password authentication failed',
@@ -56,8 +52,8 @@
             'grant_sequences_all' => 'All Sequences privileges',
             'grant_sequences_all_comment' => 'Sequences are used in the winter base system',
             'grant_functions_all' => 'All Functions privileges',
-            'login_fixed' => 'Change of login is not possible with this system',
-            'email_optional' => 'Email is optional with this system, but must be unique if set',
+            'login_fixed' => 'Guhertina têketinê bi vê sîstemê re ne mimkûn e',
+            'email_optional' => 'E-name bi vê pergalê ve bijarte ye, lê heke were danîn divê bêhempa be',
         ],
         'settings' => [
             'auto_create_backend_user' => 'Auto-Create the backend_users record',

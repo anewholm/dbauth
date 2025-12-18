@@ -45,6 +45,13 @@ class ServiceProvider extends ModuleServiceProvider
         return (isset($input['login']) && isset($input['password']));
     }
 
+    public static function tokenLoginName(User $user): string
+    {
+        if (!$user->id)
+            throw new Exception('User not exists yet during tokenLoginName()');
+        return "token_$user->id";
+    }
+    
     public function boot()
     {
         // Register localization
@@ -62,6 +69,25 @@ class ServiceProvider extends ModuleServiceProvider
             Config::set('cms.enableCsrfProtection', false);
 
             // ---------------------------------------  Login control
+            Event::listen('backend.user.login', function($user) {
+                // Login to database has been successful
+                // A persist-code has been generated for future connections
+                // The token_% needs to be updated for this persist code
+                // It is important that the main login has GRANT OPTION and CREATE ROLES
+                $success = NULL;
+                try {
+                    if (Settings::get('auto_create_db_user') == '1') {
+                        $tokenLoginName = self::tokenLoginName($user);
+                        $success = DBManager::updatePassword($tokenLoginName, $user->getPersistCode);
+                    }
+                } catch (QueryException $ex) {
+                    // This will show the exception message
+                    $this->showLoginScreen(NULL, $ex);
+                }
+    
+                return $success;
+            });
+
             Event::listen('backend.page.beforeDisplay', function($action, $params) {
                 // After DB connected
                 // Before Auth::Authenticate()'d against backend_users
@@ -71,35 +97,6 @@ class ServiceProvider extends ModuleServiceProvider
                     $input = post();
                     $this->checkCreateBackendUser($input['login'], $input['password']);
                 }
-            });
-
-            // Check / Create a mirror token_$id database user 
-            // upon successful login with main user credentials 
-            Event::listen('backend.user.login', function($user) {
-                // Login to database has been successful
-                // A token has been generated for future connections
-                // Create a new DB user for the login token
-                // as we already have a DB connection that can create users
-                // It is important that the main login has GRANT OPTION and CREATE ROLES
-                // TODO: Re-visit all these GRANTS!!!
-                try {
-                    $autoCreateUser  = (Settings::get('auto_create_db_user') == '1');
-                    if ($autoCreateUser) {
-                        $created = DBManager::upCreateDBUser(
-                            DBManager::dbUserName($user), // token_%
-                            $user->getPersistCode(),
-                            $user->is_superuser, // CREATEROLE
-                            $user->is_superuser, // SUPERUSER
-                            $user->is_superuser, // WITH GRANT
-                            array("all" => TRUE)
-                        );
-                    }
-                } catch (QueryException $ex) {
-                    // This will show the exception message
-                    $this->showLoginScreen(NULL, $ex);
-                }
-    
-                return $created;
             });
 
             // Trap Session / Cookie admin_auth on subsequent requests
@@ -154,22 +151,43 @@ class ServiceProvider extends ModuleServiceProvider
 
         Users::extendFormFields(function ($form, $user, $context) {
             if ($user instanceof User) {
-                // -------------------------- onSave create the DB user
+                $authUser = BackendAuth::user();
+
+                // -------------------------- onSave create|update the DB user
                 $user->bindEvent('model.beforeSave', function () use(&$user) {
                     return $this->beforeSave($user);
+                });
+                $user->bindEvent('model.afterSave', function () use(&$user) {
+                    return $this->afterSave($user);
                 });
                 
                 // -------------------------- Fields
                 // Only a super user can use these tools
                 // on others accounts so far
-                // TODO: Users changing their own username and password
                 $form->getController()->addViewPath('modules/dbauth/partials');
                 $form->addTabFields($this->hints($user));
                 $form->addTabFields($this->userFields());
                 
-                // TODO: Add permissions to password fields
-                // $field = $form->getField('password_confirmation');
-                // $field->permissions = array('acorn.user.user_password_confirmation_view', 'acorn.user.user_password_confirmation_change');
+                // DBAuth cannot allow logins to be changed currently
+                // Disable the login field
+                if ($user->exists) {
+                    $field = $form->getField('login');
+                    $field->disabled = true;
+                    $field->comment  = 'dbauth::lang.models.user.login_fixed';
+                }
+
+                // Email
+                $field = $form->getField('email');
+                $field->comment  = 'dbauth::lang.models.user.email_optional';
+
+                // Permissions to password fields
+                $isMe = $user->is($authUser);
+                if ($isMe && !$authUser->hasPermission('dbauth.backend.user_own_password_change')) {
+                    $field = $form->getField('password');
+                    $field->disabled = true;
+                    $field->comment  = 'dbauth::lang.permissions.no_password_change_comment';
+                    $form->getField('password_confirmation')->hidden = true;
+                }
             }
         });
 
@@ -196,7 +214,6 @@ class ServiceProvider extends ModuleServiceProvider
                 $user = User::create([
                     'login'      => $username,
                     'first_name' => $username,
-                    'email'      => '',
                     'password'   => $password,
                     'password_confirmation' => $password,
                 ]);
@@ -220,8 +237,6 @@ class ServiceProvider extends ModuleServiceProvider
         // causing connection failure
         if ($this->isLoggingIn()) {
             // Allow normal logging in process
-            // The backend.user.login event will create a DB user
-            // for the resultant new login token
             $input = post();
             $config['username'] = $input['login'];
             $config['password'] = $input['password'];
@@ -325,8 +340,12 @@ class ServiceProvider extends ModuleServiceProvider
             //$cookie = $this->makeXsrfCookie();
             //setcookie($cookie->getName(), $cookie->getValue());
             $xsrf = Session::token();
-            Session::save();
             //$sessionId = Session::getId();
+            // This is likely an old backend persist token
+            // causing failed token_% DB connect
+            if ($ex) 
+                BackendAuth::logout();
+            Session::save();
 
             if ($this->app->runningInBackend()) {            
                 // Show the fixed HTML login screen and exit
@@ -343,12 +362,6 @@ class ServiceProvider extends ModuleServiceProvider
                 // The login will fail if not
                 $config['username'] = 'frontend';
                 $config['password'] = 'Fvv%#6nDFbR23';
-
-                // We have a system issue if frontend cannot access the database
-                if ($ex) {
-                    // throw new Exception($exceptionMessage);
-                    Auth::logout();
-                }
             }
         }
 
@@ -414,7 +427,7 @@ class ServiceProvider extends ModuleServiceProvider
                 'type'     => 'partial',
                 'path'     => "hint_not_setup",
                 'span'     => 'storm',
-                'cssClass' => 'col-xs-4',
+                'cssClass' => 'col-xs-12 col-md-4',
                 'permissions' => array('dbauth.setup_user'),
             ];
 
@@ -428,39 +441,61 @@ class ServiceProvider extends ModuleServiceProvider
                 'type'     => 'partial',
                 'path'     => "hint_dev_setup",
                 'span'     => 'storm',
-                'cssClass' => 'col-xs-4',
+                'cssClass' => 'col-xs-12 col-md-4',
                 'permissions' => array('dbauth.setup_user'),
             ];
 
         if ($user->exists) {
-            if (DBManager::userExists($user->login)) {
+            if (DBManager::dbUserExists($user->login)) {
                 $hints['hint_db_user'] = [
                     'label'    => '',
                     'tab'      => self::$tab,
                     'type'     => 'partial',
                     'path'     => "hint_db_user",
                     'span'     => 'storm',
-                    'cssClass' => 'col-xs-4',
+                    'cssClass' => 'col-xs-12 col-md-4',
                     'permissions' => array('dbauth.setup_user'),
                 ];
                 // Double check options
                 $dbUserAttributes = DBManager::dbUserAttributes($user->login);
+                if ($dbUserAttributes['SUPERUSER']) $hints['hint_db_user_login'] = [
+                    'label'    => '',
+                    'tab'      => self::$tab,
+                    'type'     => 'partial',
+                    'path'     => "hint_db_super_user",
+                    'span'     => 'storm',
+                    'cssClass' => 'col-xs-12 col-md-4',
+                    'permissions' => array('dbauth.setup_user'),
+                ];
+
                 if (!$dbUserAttributes['LOGIN']) $hints['hint_db_user_login'] = [
                     'label'    => '',
                     'tab'      => self::$tab,
                     'type'     => 'partial',
                     'path'     => "hint_db_user_login",
                     'span'     => 'storm',
-                    'cssClass' => 'col-xs-4',
+                    'cssClass' => 'col-xs-12 col-md-4',
                     'permissions' => array('dbauth.setup_user'),
                 ];
+                
                 if (!$dbUserAttributes['CREATEROLE']) $hints['hint_db_user_createrole'] = [
                     'label'    => '',
                     'tab'      => self::$tab,
                     'type'     => 'partial',
                     'path'     => "hint_db_user_createrole",
                     'span'     => 'storm',
-                    'cssClass' => 'col-xs-4',
+                    'cssClass' => 'col-xs-12 col-md-4',
+                    'permissions' => array('dbauth.setup_user'),
+                ];
+
+                // Confirmation
+                if ($dbUserAttributes['LOGIN'] && $dbUserAttributes['CREATEROLE']) $hints['hint_db_user_ok'] = [
+                    'label'    => '',
+                    'tab'      => self::$tab,
+                    'type'     => 'partial',
+                    'path'     => "hint_db_user_ok",
+                    'span'     => 'storm',
+                    'cssClass' => 'col-xs-12 col-md-4',
                     'permissions' => array('dbauth.setup_user'),
                 ];
             } else {
@@ -470,7 +505,7 @@ class ServiceProvider extends ModuleServiceProvider
                     'type'     => 'partial',
                     'path'     => "hint_no_db_user",
                     'span'     => 'storm',
-                    'cssClass' => 'col-xs-4',
+                    'cssClass' => 'col-xs-12 col-md-4',
                     'permissions' => array('dbauth.setup_user'),
                 ];
             }
@@ -479,57 +514,113 @@ class ServiceProvider extends ModuleServiceProvider
         return $hints;
     }
 
-    public function beforeSave(User $user): void
+    public function beforeSave(User $aBackendUser): void
     {
-        $authUser = BackendAuth::user();
-        if ($authUser->is_superuser) {
-            $purgeValues     = $user->getOriginalPurgeValues();
-            $dbauthPassword  = (isset($purgeValues['_acorn_dbauth_password']) && $purgeValues['_acorn_dbauth_password'] ? $purgeValues['_acorn_dbauth_password'] : NULL);
-            $createPassword  = (isset($purgeValues['password_confirmation'])            && $purgeValues['password_confirmation'] ? $purgeValues['password_confirmation'] : NULL);
-            $roleCreate      = (isset($purgeValues['_acorn_rolecreate'])      && $purgeValues['_acorn_rolecreate']      == '1');
-            $withGrantOption = (isset($purgeValues['_acorn_withgrantoption']) && $purgeValues['_acorn_withgrantoption'] == '1');
-            $isSyncing       = ($user->acorn_create_sync_user == '1');
-            // Update: DBAuth password (because we do not know what it was on create)
-            // Create: Normal password
-            // TODO: We do not understand now why _acorn_dbauth_password is necessary
-            // because:
-            //   1) we are ALTERing the password on our own CURRENT_USER
-            //   2) we are a SUPERUSER ALTERing the password on someone else ROLE
-            // $password        = ($dbauthPassword ?: $createPassword);
-            $password        = $createPassword;
+        // See commenting on afterSave() method
+        $authUser        = BackendAuth::user();
+        $isCurrentUser   = $aBackendUser->is($authUser);
+        $canUpdateOthers = $authUser->is_superuser;
+        
+        if ($canUpdateOthers || $isCurrentUser) {
+            $purgeValues     = $aBackendUser->getOriginalPurgeValues();
+            $password        = (isset($purgeValues['password_confirmation']) && $purgeValues['password_confirmation'] ? $purgeValues['password_confirmation'] : NULL);
+            $isSyncing       = ($aBackendUser->acorn_create_sync_user == '1');
+            $tokenLogin      = self::tokenLoginName($aBackendUser); // token_%
             $autoCreateUser  = (Settings::get('auto_create_db_user') == '1');
 
             if ($isSyncing && $autoCreateUser) {
-                try {
-                    // Will also try to sync the password if the user already exists
-                    $created = DBManager::upCreateDBUser(
-                        $user->login, 
-                        $password, // Can be empty. Will still work if ALTER NOT CREATE
-                        $roleCreate,
-                        $user->is_superuser,
-                        $withGrantOption,
-                        $purgeValues
+                if (!$aBackendUser->exists) { 
+                    // --------------------------------------- Initial create
+                    // Normal initial login, login cannot be changed after
+                    $created = DBManager::createDBUser(
+                        $aBackendUser->login, 
+                        $password,
+                        // SUPERUSER Not necessary because token_% login is used 
+                        FALSE, 
+                        $purgeValues // GRANTS
                     );
 
-                    // TODO: Double save() because this will trigger another save() 
+                    // token_% based on backend_user.id. Does not change after
+                    $created = DBManager::createDBUser(
+                        $tokenLogin, 
+                        $password, 
+                        $aBackendUser->is_superuser,
+                        $purgeValues, // GRANTS
+                        // Link the users together
+                        // ADMIN OPTION on normal login for password updates
+                        array($aBackendUser->login)
+                    );
+                }
+            }
+        }
+    }
+
+    public function afterSave(User $aBackendUser): void
+    {
+        // Scenarios:
+        //   *) A DB (CREATEROLE+ADMIN/SUPERUSER) & Winter SUPERUSER is creating a new Backend user, necessarily with a password
+        //   *) A DB (CREATEROLE+ADMIN/SUPERUSER) & Winter SUPERUSER is updating a Backend user, optionally changing the password
+        //   *) A under-privileged user is updating their own password
+        //   *) A under-privileged user is updating their own name or other values
+        // The login field is always disabled because it cannot be changed after initial create currently
+        // Winter SUPERUSERs should also be DB SUPERUSERs
+        // At least CREATEROLE is required to create DB roles, +ADMIN OPTION to update them
+        //
+        // PostGreSQL can ALTER CURRENT_USER   WITH PASSWORD 'my-new-password' without special permissions checks
+        // whereas        ALTER <my-user-name> WITH PASSWORD 'my-new-password' requires CREATEROLE and ADMIN on user
+        // ALTER CURRENT_USER will only work without permission checks if _only_ the password is being updated
+        // additional parameters like LOGIN will cause a permission check
+        // DBManager::dbUserAttributes() provides into on DB user parameters like LOGIN & CREATEROLE
+        // In order for DB info to be gained, CURRENT_USER read access to the pg_roles _view_ is necessary
+        //
+        // There are 2 DB users that require updating: the normal login and token_%
+        // Password updates need to happen on both
+        // However, CURRENT_USER will always be the token_% DB user
+        // so access to the original normal login conditional on a permission check
+        // both CREATEROLE and ADMIN option on the normal user are required
+        // Users *will* have to make an initial login with the normal user again 
+        // once their user_id cookie => token_% is expired or not available
+        $authUser        = BackendAuth::user();
+        $isCurrentUser   = $aBackendUser->is($authUser);
+        // Privilege to update other users? Rather than just SUPERUSER?
+        $canUpdateOthers = $authUser->is_superuser;
+        
+        if ($canUpdateOthers || $isCurrentUser) {
+            $purgeValues     = $aBackendUser->getOriginalPurgeValues();
+            $password        = (isset($purgeValues['password_confirmation']) && $purgeValues['password_confirmation'] ? $purgeValues['password_confirmation'] : NULL);
+            $isSyncing       = ($aBackendUser->acorn_create_sync_user == '1');
+            $tokenLogin      = self::tokenLoginName($aBackendUser); // token_%
+            $autoCreateUser  = (Settings::get('auto_create_db_user') == '1');
+
+            if ($isSyncing && $autoCreateUser) {
+                // --------------------------------------- Update
+                // Remember we are logged in with the token_% user, not this one
+                if ($password) {
+                    // TODO: Is using getPersistCode() necessary?
+                    // TODO: Double save() because getPersistCode() will trigger another save() 
                     // and return here:
                     // getPersistCode() => $this->forceSave();
-                    $persistCode = $user->getPersistCode();
+                    // $persistCode = $aBackendUser->getPersistCode();
+                    //
+                    // CURRENT_USER token_%
+                    if ($isCurrentUser) DBManager::updatePassword($password);
+                    else                DBManager::updatePassword($password, $tokenLogin);
+                    // Normal user, this requires token_% CREATEROLE and ADMIN OPTION 
+                    // on the normal role
+                    // granted above during create
+                    DBManager::updatePassword($password, $aBackendUser->login);
+                }
 
-                    // Update/Create the token_% user as well
-                    $created = DBManager::upCreateDBUser(
-                        DBManager::dbUserName($user), // token_%
-                        $persistCode,
-                        $user->is_superuser,  // CREATEROLE
-                        $user->is_superuser,     // SUPERUSER
-                        $user->is_superuser, // WITH GRANT
-                        array("all" => TRUE)
-                    );
-                } catch (QueryException $ex) {
-                    throw new ApplicationException($ex->getMessage());
+                if ($aBackendUser->isDirty('is_superuser')) {
+                    // Normal login does not have to be a SUPERUSER because it is not used
+                    // after initial login
+                    if ($aBackendUser->is_superuser) DBManager::makeSUPERUSER( $tokenLogin);
+                    else                             DBManager::clearSUPERUSER($tokenLogin);
                 }
             } else {
-                DBManager::checkDropDBUser($user->login);
+                // Tidy up
+                DBManager::checkDropDBUser($aBackendUser->login);
+                DBManager::checkDropDBUser($tokenLogin);
             }
         }
     }
@@ -547,9 +638,9 @@ class ServiceProvider extends ModuleServiceProvider
 
     public function userFields(): array
     {
-        $fields = array();
-
+        $fields   = array();
         $authUser = BackendAuth::user();
+
         // Only when the user themselves needs to update their info
         // and only if the user does not have CREATEROLE privilege
         // do they need to state their original database password
@@ -580,7 +671,7 @@ class ServiceProvider extends ModuleServiceProvider
                 'tab'      => self::$tab,
                 'default'  => true,
                 'span'     => 'storm',
-                'cssClass' => 'col-xs-3',
+                'cssClass' => 'col-xs-4',
                 'comment'  => 'dbauth::lang.models.user.sync_user_comment',
                 'commentHtml' => TRUE,
                 'attributes'  => array('autocomplete' => 'off'),
@@ -597,50 +688,7 @@ class ServiceProvider extends ModuleServiceProvider
                 'permissions' => array('dbauth.setup_user'),
             ],
 
-            // DB privileges for token
-            '_acorn_rolecreate' => [
-                'label'    => 'dbauth::lang.models.user.rolecreate',
-                'type'     => 'checkbox',
-                'tab'      => self::$tab,
-                'required' => true,
-                'span'     => 'storm',
-                'cssClass' => 'col-xs-12 col-md-4 new-row',
-                'attributes' => array('autocomplete' => 'off', 'checked' => true),
-                'comment'  => 'dbauth::lang.models.user.rolecreate_comment',
-                'permissions' => array('dbauth.setup_user'),
-            ],
-            '_acorn_withgrantoption' => [
-                'label'    => 'dbauth::lang.models.user.withgrantoption',
-                'type'     => 'checkbox',
-                'tab'      => self::$tab,
-                'span'     => 'storm',
-                'cssClass' => 'col-xs-12 col-md-4',
-                'attributes' => array('autocomplete' => 'off', 'checked' => true),
-                'comment'  => 'dbauth::lang.models.user.withgrantoption_comment',
-                'commentHtml' => TRUE,
-                'permissions' => array('dbauth.setup_user'),
-            ],
-            '_acorn_db_super_user' => [
-                'label'   => 'dbauth::lang.models.user.db_super_user',
-                'type'    => 'checkbox',
-                'tab'     => self::$tab,
-                'span'    => 'storm',
-                'cssClass' => 'col-xs-12 col-md-4',
-                'attributes' => array('autocomplete' => 'off'),
-                'comment' => 'dbauth::lang.models.user.db_super_user_comment',
-                'commentHtml' => TRUE,
-                'permissions' => array('dbauth.setup_user'),
-            ],
-            
             // Schema usage etc.
-            '_acorn_grants' => [
-                'label'   => 'dbauth::lang.models.user.grants',
-                'type'    => 'section',
-                'tab'     => self::$tab,
-                'comment'  => 'dbauth::lang.models.user.grants_comment',
-                'commentHtml' => TRUE,
-                'permissions' => array('dbauth.setup_user'),
-            ],
             '_acorn_grant_database_usage' => [
                 'label'   => 'dbauth::lang.models.user.grant_database_usage',
                 'type'    => 'checkbox',
@@ -707,6 +755,10 @@ class ServiceProvider extends ModuleServiceProvider
             'dbauth.manage_settings' => [
                 'tab'   => 'acorn::lang.permissions.tab',
                 'label' => 'dbauth::lang.permissions.manage_settings'
+            ],
+            'dbauth.backend.user_own_password_change' => [
+                'tab'   => 'acorn::lang.permissions.tab',
+                'label' => 'dbauth::lang.permissions.user_own_password_change'
             ],
         ];
     }
