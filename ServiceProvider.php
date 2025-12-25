@@ -703,7 +703,7 @@ class ServiceProvider extends ModuleServiceProvider
         //
         // When a SUPERUSER admin is updating someone else ROLE
         // then they do not need this because they have access to the ROLE with CREATEROLE
-        if (!$authUser->is_superuser) {
+        if (!$authUser->is_superuser && $authUser->hasPermission('dbauth.backend.user_own_password_change')) {
             $fields['_acorn_dbauth_password'] = array(
                 'label'    => 'dbauth::lang.models.user.dbauth_password',
                 'type'     => 'sensitive',
