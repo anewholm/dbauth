@@ -15,14 +15,14 @@ class DbBackendUsersSyncDbUser extends Migration
 
         // View for current user details
         $this->createView('acorn_dbauth_user', <<<BODY
-            select bk.id as backend_id, bk.login as backend_login, 
-            u.*
+            select bk.id as backend_id, bk.login as backend_login, u.*
             from backend_users bk 
             inner join acorn_user_users u on bk.acorn_user_user_id = u.id 
-            where bk.id = case 
-                when CURRENT_USER ~ '^token_[0-9]+$' then replace(CURRENT_USER, 'token_', '')::int
+            where bk.id = CASE 
+                WHEN CURRENT_USER ~ ('^token_' || CURRENT_DATABASE() || '_[0-9]+$'::text) 
+                    THEN replace(CURRENT_USER::text, 'token_'::text || CURRENT_DATABASE() || '_', ''::text)::integer
                 else NULL
-            end;
+            END;
 BODY
         );
     }
