@@ -5,15 +5,19 @@ fields:
         tab: DB Auth
         type: partial
         path: modules/dbauth/partials/_hint_dev_setup.php
+        cssClass: col-xs-4
     _hint_not_setup:
         tab: DB Auth
         type: partial
         path: modules/dbauth/partials/_hint_not_setup.php
+        cssClass: col-xs-4
     _hint_CURRENT_USER:
         tab: DB Auth
         type: partial
         path: modules/dbauth/partials/_hint_CURRENT_USER.php
-    # TODO: Complete the functionality behind DBAuth settings
+        cssClass: col-xs-4
+
+    # // TODO: Complete the functionality behind DBAuth settings
     auto_create_backend_user:
         label: dbauth::lang.models.settings.auto_create_backend_user
         type: switch
