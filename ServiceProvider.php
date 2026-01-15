@@ -6,6 +6,7 @@ use Illuminate\Session\SessionManager;
 use DBAuth\PostGreSQLManager as DBManager;
 use DBAuth\Models\Settings;
 use BackendAuth;
+use Backend\Models\User as BackendUser;
 use Event;
 use Exception;
 use DB;
