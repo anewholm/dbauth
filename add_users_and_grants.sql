@@ -26,6 +26,18 @@ CREATE ROLE createsystem WITH
   BYPASSRLS
   ENCRYPTED PASSWORD 'SCRAM-SHA-256$4096:Lso0xmmBORGZFwtxYJS0fA==$WGk85/B0EDw48NJMhFfIExyAry9X/OnGNQ+J9notZck=:51pMvWjjz4l/rOzkQ8hpgKTOqsnUXqMj184UungUCPU=';
 
+-- ######################################################### create-system superuser
+DROP ROLE IF EXISTS olap;
+CREATE ROLE olap WITH
+  LOGIN
+  SUPERUSER
+  INHERIT
+  CREATEDB
+  CREATEROLE
+  NOREPLICATION
+  BYPASSRLS
+  ENCRYPTED PASSWORD 'SCRAM-SHA-256$4096:Lso0xmmBORGZFwtxYJS0fA==$WGk85/B0EDw48NJMhFfIExyAry9X/OnGNQ+J9notZck=:51pMvWjjz4l/rOzkQ8hpgKTOqsnUXqMj184UungUCPU=';
+
 -- ######################################################### admin superuser => token_1
 DROP ROLE IF EXISTS admin;
 CREATE ROLE admin WITH
