@@ -14,7 +14,6 @@ use File;
 use Lang;
 use Flash;
 use Backend\Controllers\Users;
-use SebastianBergmann\Type\VoidType;
 use System\Classes\SettingsManager;
 use Winter\Storm\Support\ModuleServiceProvider;
 use Illuminate\Database\Connectors\ConnectionFactory;
