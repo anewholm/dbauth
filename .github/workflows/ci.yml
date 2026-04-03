@@ -100,6 +100,11 @@ jobs:
         run: |
           sed -i "s/'Cms'/'Cms', 'Acorn', 'DBAuth'/" config/cms.php
 
+      - name: Fix lists() removed in Laravel 10+ (WinterCMS dev-develop)
+        working-directory: wintercms
+        run: |
+          find modules/system/classes -name "VersionManager.php" -exec sed -i "s/->lists(/->pluck(/g" {} \;
+
       - name: Run migrations
         working-directory: wintercms
         run: php artisan winter:up
