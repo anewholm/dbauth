@@ -98,7 +98,7 @@ jobs:
       - name: Enable DBAuth module
         working-directory: wintercms
         run: |
-          sed -i "s/'loadModules' => \[/'loadModules' => ['Acorn', 'DBAuth',/" config/cms.php
+          sed -i "s/'Cms'/'Cms', 'Acorn', 'DBAuth'/" config/cms.php
 
       - name: Run migrations
         working-directory: wintercms
