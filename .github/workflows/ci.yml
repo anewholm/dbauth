@@ -120,25 +120,16 @@ jobs:
             sleep 1
           done
 
-      - name: Diagnose server routing
+      - name: Smoke test — backend login page loads (200)
         run: |
-          echo "=== /backend ==="
-          curl -s -D - -o /dev/null http://localhost:8000/backend | head -5
-          echo "=== /backend/signin ==="
-          curl -s http://localhost:8000/backend/signin | head -5
-          echo "=== PHP server log ==="
-          cat /tmp/php-server.log || true
-
-      - name: Smoke test — login page loads (200)
-        run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L http://localhost:8000/backend/signin)
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L http://localhost:8000/backend/auth)
           echo "Login page status: $STATUS"
           test "$STATUS" = "200"
 
       - name: Smoke test — bad credentials return 200 with error (not 500)
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST http://localhost:8000/backend/signin \
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L \
+            -X POST http://localhost:8000/backend/auth \
             -d "postback=1&login=nobody&password=wrongpassword")
           echo "Bad login status: $STATUS"
           test "$STATUS" = "200"
