@@ -80,6 +80,12 @@ jobs:
             composer create-project wintercms/winter wintercms --prefer-dist --no-interaction -q
           fi
 
+      - name: Check out Acorn module
+        uses: actions/checkout@v4
+        with:
+          repository: anewholm/acorn
+          path: wintercms/modules/acorn
+
       - name: Place DBAuth module
         run: cp -r dbauth-src wintercms/modules/dbauth
 
@@ -92,7 +98,7 @@ jobs:
       - name: Enable DBAuth module
         working-directory: wintercms
         run: |
-          sed -i "s/'loadModules' => \[/'loadModules' => ['DBAuth',/" config/cms.php
+          sed -i "s/'loadModules' => \[/'loadModules' => ['Acorn', 'DBAuth',/" config/cms.php
 
       - name: Run migrations
         working-directory: wintercms
