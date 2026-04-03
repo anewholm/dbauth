@@ -86,19 +86,13 @@ jobs:
       - name: Configure WinterCMS
         working-directory: wintercms
         run: |
-          cp .env.example .env
+          printf 'APP_NAME="Winter CMS"\nAPP_KEY=\nAPP_DEBUG=true\nAPP_URL=http://localhost:8000\nDB_CONNECTION=pgsql\nDB_HOST=127.0.0.1\nDB_PORT=5432\nDB_DATABASE=wintercms_test\nDB_USERNAME=createsystem\nDB_PASSWORD=testpassword\nCACHE_DRIVER=file\nSESSION_DRIVER=file\nQUEUE_CONNECTION=sync\nROUTES_CACHE=false\nASSET_CACHE=false\nLINK_POLICY=detect\nENABLE_CSRF=true\n' | tee .env
           php artisan key:generate --quiet
-          sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=pgsql/' .env
-          sed -i 's/DB_HOST=.*/DB_HOST=127.0.0.1/' .env
-          sed -i 's/DB_PORT=.*/DB_PORT=5432/' .env
-          sed -i 's/DB_DATABASE=.*/DB_DATABASE=wintercms_test/' .env
-          sed -i 's/DB_USERNAME=.*/DB_USERNAME=createsystem/' .env
-          sed -i 's/DB_PASSWORD=.*/DB_PASSWORD=testpassword/' .env
 
       - name: Enable DBAuth module
         working-directory: wintercms
         run: |
-          sed -i "s/'loadModules' => \[System/'loadModules' => [System, DBAuth/" config/cms.php
+          sed -i "s/'loadModules' => \[/'loadModules' => ['DBAuth',/" config/cms.php
 
       - name: Run migrations
         working-directory: wintercms
@@ -106,7 +100,7 @@ jobs:
 
       - name: Start PHP dev server
         working-directory: wintercms
-        run: php -S localhost:8000 public/index.php &
+        run: php -S localhost:8000 index.php &
 
       - name: Wait for server
         run: sleep 3
