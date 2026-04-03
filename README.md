@@ -1,23 +1,91 @@
-# DB Auth direct module
-This module logs in to the database with the front-end user login credentials. Because of this no usernames/passwords are necessary on the webserver, in `config/database.php`.
-After login Laravel creates a session token for further requests. At the same time this plugin creates a new database user with the same name as the session token and the same privileges as the original database user. Further database logins use this token database user. PostGreSQL RLS [Row Level Security](https://www.postgresql.org/docs/current/ddl-rowsecurity.html) policies are recommended to restrict access to information in the database.
+# DBAuth — Database-credential login for WinterCMS
 
-DBAuth only officially supports PostGreSQL.
+[![CI](https://github.com/anewholm/dbauth/actions/workflows/ci.yml/badge.svg)](https://github.com/anewholm/dbauth/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/anewholm/dbauth/actions/workflows/codeql.yml/badge.svg)](https://github.com/anewholm/dbauth/actions/workflows/codeql.yml)
+
+DBAuth is a WinterCMS module that logs directly into PostgreSQL using the end-user's credentials. No database username or password is stored in `.env` or `config/database.php`. Each authenticated session is backed by a dedicated, short-lived PostgreSQL role, enabling [Row Level Security (RLS)](https://www.postgresql.org/docs/current/ddl-rowsecurity.html) policies to scope data access per user at the database level.
+
+![Login Screen](login.png "DBAuth custom login screen")
+
+## What it does
+
+1. Serves a static HTML login page before any database connection is attempted.
+2. On successful login, creates a session-scoped PostgreSQL role with the same privileges as the authenticated user.
+3. All subsequent Laravel database connections for that session use the session role.
+4. On logout, the session role is revoked immediately.
+5. When a WinterCMS admin creates a new backend user, DBAuth provisions a matching PostgreSQL role automatically.
+
+![DBAuth account setup](setup.png "Per-account DBAuth configuration")
+
+## Why PostgreSQL only?
+
+DBAuth is fundamentally built on PostgreSQL's `CREATEROLE`, `GRANT`, and Row Level Security features. MySQL has no equivalent. This is a deliberate architectural choice — the PostgreSQL security model is central to DBAuth's guarantees, not an incidental dependency.
+
+**Requires PostgreSQL 12+. MySQL is not supported by design.**
+
+## Compatibility
+
+| WinterCMS | Laravel | PHP  | PostgreSQL |
+|-----------|---------|------|------------|
+| 1.2.0     | 9       | 8.1+ | 12+        |
+| 1.2.x     | 10      | 8.1+ | 12+        |
+| 1.2.x     | 11      | 8.2+ | 12+        |
+
+## Prerequisites
+
+- WinterCMS 1.2+ installed
+- [Acorn module](https://github.com/anewholm/acorn) installed as `modules/acorn`
+- PostgreSQL 12+ with a superuser account (needed during installation to create roles)
 
 ## Installation
-`git clone` this module in to Laravel `~/modules`.
-Register the `DBAuth\ServiceProvider::class` in the `config/app.php` providers list.
-Set the database username and password in `config/database.app` to "&lt;DBAUTH&gt;" to trigger the plugin functionality.
 
-## Login screen
-DBAuth presents its own static HTML login screen because it needs to ensure that no attempts are made to access the database before login is successful. Laravels normal bootstrap and login screen process is likely to try and connect to the database. However, before DBAuth login, the database cannot be accessed. You can author your own version of the login screen by writing the `~/public/resources/login.html`.
+1. Clone this repository into `modules/dbauth` inside your WinterCMS root:
+   ```bash
+   git clone https://github.com/anewholm/dbauth modules/dbauth
+   ```
 
-![Login Screen](login.png "login screen")
+2. Clone the Acorn dependency into `modules/acorn`:
+   ```bash
+   git clone https://github.com/anewholm/acorn modules/acorn
+   ```
+
+3. Add both modules to `config/cms.php`:
+   ```php
+   'loadModules' => ['System', 'Backend', 'Cms', 'Acorn', 'DBAuth'],
+   ```
+
+4. Configure `.env` with your PostgreSQL superuser credentials and run migrations:
+   ```
+   DB_CONNECTION=pgsql
+   DB_USERNAME=your_superuser
+   DB_PASSWORD=your_password
+   ```
+   ```bash
+   php artisan winter:up
+   ```
+
+5. Switch `.env` to DBAuth mode — replace the credentials with the sentinel values:
+   ```
+   DB_USERNAME=<DBAUTH>
+   DB_PASSWORD=<DBAUTH>
+   ```
+
+6. Navigate to `/backend/auth` — the DBAuth login screen will appear.
+
+## Custom login page
+
+DBAuth serves its own static HTML login page to ensure no database connection is attempted before authentication. To customise it, create `public/resources/login.html`.
 
 ## Artisan
-Artisan also needs to connect to the database. It will attempt a standard development database login which is wise to use in development situations, and then ask if connection fails.
 
-## Granting other users access
-When a superuser creates a new user with [Winter CMS](https://wintercms.com), DBAuth will create a new PostGreSQL database user as well. This situation can be managed in the DBAuth account tab by super users.
+Artisan connects to the database during bootstrap. When `DB_USERNAME=<DBAUTH>`, DBAuth falls back to a standard development login. If that fails, it prompts interactively. This is intentional and safe for development use.
 
-![DBAuth setup for an account](setup.png "DBAuth setup for an account")
+## Known limitations
+
+- PostgreSQL only — no MySQL support.
+- WinterCMS backend usernames cannot be changed after creation (WinterCMS limitation).
+- Concurrent logins by the same user each receive their own session role; orphaned roles from crashed sessions are cleaned up on the next successful login.
+
+## License
+
+MIT
