@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+
+  # ── Quick syntax check (no WinterCMS needed) ─────────────────────────────────
+
+  lint:
+    name: PHP Syntax
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP 8.2
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+
+      - name: Check PHP syntax
+        run: find . -name "*.php" -not -path "./vendor/*" -exec php -l {} \;
+
+  # ── Integration test: install on WinterCMS + run migrations ──────────────────
+
+  integrate:
+    name: WinterCMS ${{ matrix.wintercms }} / PHP ${{ matrix.php }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - wintercms: "1.2.0"
+            php: "8.1"
+          - wintercms: "dev-develop"
+            php: "8.2"
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: wintercms_test
+          POSTGRES_USER: createsystem
+          POSTGRES_PASSWORD: testpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: dbauth-src
+
+      - name: Setup PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo_pgsql, mbstring, xml, gd, curl, zip
+          coverage: none
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.composer/cache
+          key: composer-wintercms-${{ matrix.wintercms }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: composer-wintercms-${{ matrix.wintercms }}-
+
+      - name: Install WinterCMS ${{ matrix.wintercms }}
+        run: |
+          if [ "${{ matrix.wintercms }}" = "1.2.0" ]; then
+            composer create-project wintercms/winter:1.2.0 wintercms --prefer-dist --no-interaction -q
+          else
+            composer create-project wintercms/winter wintercms --prefer-dist --no-interaction -q
+          fi
+
+      - name: Place DBAuth module
+        run: cp -r dbauth-src wintercms/modules/dbauth
+
+      - name: Configure WinterCMS
+        working-directory: wintercms
+        run: |
+          cp .env.example .env
+          php artisan key:generate --quiet
+          sed -i 's/DB_CONNECTION=.*/DB_CONNECTION=pgsql/' .env
+          sed -i 's/DB_HOST=.*/DB_HOST=127.0.0.1/' .env
+          sed -i 's/DB_PORT=.*/DB_PORT=5432/' .env
+          sed -i 's/DB_DATABASE=.*/DB_DATABASE=wintercms_test/' .env
+          sed -i 's/DB_USERNAME=.*/DB_USERNAME=createsystem/' .env
+          sed -i 's/DB_PASSWORD=.*/DB_PASSWORD=testpassword/' .env
+
+      - name: Enable DBAuth module
+        working-directory: wintercms
+        run: |
+          sed -i "s/'loadModules' => \[System/'loadModules' => [System, DBAuth/" config/cms.php
+
+      - name: Run migrations
+        working-directory: wintercms
+        run: php artisan winter:up
+
+      - name: Start PHP dev server
+        working-directory: wintercms
+        run: php -S localhost:8000 public/index.php &
+
+      - name: Wait for server
+        run: sleep 3
+
+      - name: Smoke test — login page loads (200)
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/backend/signin)
+          echo "Login page status: $STATUS"
+          test "$STATUS" = "200"
+
+      - name: Smoke test — bad credentials return 200 with error (not 500)
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST http://localhost:8000/backend/signin \
+            -d "postback=1&login=nobody&password=wrongpassword")
+          echo "Bad login status: $STATUS"
+          test "$STATUS" = "200"
