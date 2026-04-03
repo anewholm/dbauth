@@ -120,6 +120,15 @@ jobs:
             sleep 1
           done
 
+      - name: Diagnose server routing
+        run: |
+          echo "=== /backend ==="
+          curl -s -D - -o /dev/null http://localhost:8000/backend | head -5
+          echo "=== /backend/signin ==="
+          curl -s http://localhost:8000/backend/signin | head -5
+          echo "=== PHP server log ==="
+          cat /tmp/php-server.log || true
+
       - name: Smoke test — login page loads (200)
         run: |
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L http://localhost:8000/backend/signin)
