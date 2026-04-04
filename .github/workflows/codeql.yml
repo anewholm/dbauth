@@ -23,5 +23,6 @@ jobs:
         with:
           languages: php
           build-mode: none
+          tools: latest
 
       - uses: github/codeql-action/analyze@v4
