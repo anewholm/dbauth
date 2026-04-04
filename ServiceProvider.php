@@ -351,17 +351,18 @@ class ServiceProvider extends ModuleServiceProvider
 
             $username = NULL;
             $password = NULL;
+            $devPassword = env('ARTISAN_DEV_PASSWORD', '');
             if (env('ARTISAN_AUTO_LOGIN')) {
                 $username = 'artisan';
-                $password = 'ACORN_DEV_PASSWORD';
+                $password = $devPassword;
             } else {
                 print("\e[1;37;40mDB Auth is active.\e[0m ");
                 print("So no database connection credentials are available in .env.\n");
-                print("If you set .env \e[1;37;40mARTISAN_AUTO_LOGIN=1\e[0m then artisan will auto-login with winter/ACORN_DEV_PASSWORD\n");
+                print("If you set .env \e[1;37;40mARTISAN_AUTO_LOGIN=1\e[0m and \e[1;37;40mARTISAN_DEV_PASSWORD\e[0m then artisan will auto-login.\n");
                 print("\e[32mDatabase username\e[0m [winter]: ");
                 $username = (readline() ?: 'winter');
-                print("\e[32mDatabase password\e[0m [ACORN_DEV_PASSWORD]: ");
-                $password = (readline() ?: 'ACORN_DEV_PASSWORD');
+                print("\e[32mDatabase password\e[0m: ");
+                $password = (readline() ?: $devPassword);
             }
             $config['username'] = $username;
             $config['password'] = $password;
@@ -393,8 +394,8 @@ class ServiceProvider extends ModuleServiceProvider
                 // Well, it is a front-end request
                 // which does NOT mean there is a front-end necessarily
                 // The login will fail if not
-                $config['username'] = 'frontend';
-                $config['password'] = 'DBAUTH_FRONTEND_PASSWORD';
+                $config['username'] = env('DBAUTH_FRONTEND_USER', 'frontend');
+                $config['password'] = env('DBAUTH_FRONTEND_PASSWORD', '');
             }
         }
 
