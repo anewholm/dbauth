@@ -1,7 +1,6 @@
 # DBAuth — Database-credential login for WinterCMS
 
 [![CI](https://github.com/anewholm/dbauth/actions/workflows/ci.yml/badge.svg)](https://github.com/anewholm/dbauth/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/anewholm/dbauth/actions/workflows/codeql.yml/badge.svg)](https://github.com/anewholm/dbauth/actions/workflows/codeql.yml)
 
 DBAuth is a WinterCMS module that logs directly into PostgreSQL using the end-user's credentials. No database username or password is stored in `.env` or `config/database.php`. Each authenticated session is backed by a dedicated, short-lived PostgreSQL role, enabling [Row Level Security (RLS)](https://www.postgresql.org/docs/current/ddl-rowsecurity.html) policies to scope data access per user at the database level.
 
