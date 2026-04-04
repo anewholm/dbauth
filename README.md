@@ -55,22 +55,36 @@ DBAuth is fundamentally built on PostgreSQL's `CREATEROLE`, `GRANT`, and Row Lev
    ```
 
 4. Configure `.env` with your PostgreSQL superuser credentials and run migrations:
-   ```
+   ```ini
    DB_CONNECTION=pgsql
+   DB_HOST=127.0.0.1
+   DB_PORT=5432
+   DB_DATABASE=your_database
    DB_USERNAME=your_superuser
    DB_PASSWORD=your_password
    ```
    ```bash
    php artisan winter:up
    ```
+   This creates the necessary PostgreSQL roles and grants. The superuser is only needed during this phase.
 
 5. Switch `.env` to DBAuth mode — replace the credentials with the sentinel values:
-   ```
+   ```ini
    DB_USERNAME=<DBAUTH>
    DB_PASSWORD=<DBAUTH>
+
+   # Optional: for artisan/CLI access after switching to DBAuth mode
+   # ARTISAN_AUTO_LOGIN=1
+   # ARTISAN_DEV_PASSWORD=your_dev_password
+
+   # Optional: for unauthenticated front-end requests
+   # DBAUTH_FRONTEND_USER=frontend
+   # DBAUTH_FRONTEND_PASSWORD=your_frontend_password
    ```
 
-6. Navigate to `/backend/auth` — the DBAuth login screen will appear.
+6. Navigate to `/backend/signin` — the DBAuth login screen will appear.
+
+> **Note:** `ARTISAN_DEV_PASSWORD` and `DBAUTH_FRONTEND_PASSWORD` are development/infrastructure credentials, not end-user credentials. They do not replace the security model — DBAuth still creates session-scoped PostgreSQL roles per login and revokes them on logout.
 
 ## Custom login page
 
