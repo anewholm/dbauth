@@ -78,7 +78,23 @@ DBAuth serves its own static HTML login page to ensure no database connection is
 
 ## Artisan
 
-Artisan connects to the database during bootstrap. When `DB_USERNAME=<DBAUTH>`, DBAuth falls back to a standard development login. If that fails, it prompts interactively. This is intentional and safe for development use.
+When `DB_USERNAME=<DBAUTH>`, DBAuth intercepts Artisan's database connection and prompts for credentials interactively. For automated `artisan` use (e.g. CI, cron), set these `.env` variables:
+
+| Variable | Purpose |
+|---|---|
+| `ARTISAN_AUTO_LOGIN=1` | Skip the interactive prompt |
+| `ARTISAN_DEV_PASSWORD` | Password used when auto-login is active |
+
+## Frontend requests
+
+Unauthenticated front-end page requests use a static PostgreSQL user with limited privileges (read access + write access to throttling tables). Configure this user in `.env`:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DBAUTH_FRONTEND_USER` | `frontend` | PostgreSQL username for unauthenticated requests |
+| `DBAUTH_FRONTEND_PASSWORD` | *(empty)* | Password for the frontend user |
+
+Create the PostgreSQL user with appropriate grants before switching `.env` to `<DBAUTH>` mode.
 
 ## Known limitations
 
