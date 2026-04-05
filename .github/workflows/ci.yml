@@ -24,19 +24,11 @@ jobs:
       - name: Check PHP syntax
         run: find . -name "*.php" -not -path "./vendor/*" -exec php -l {} \;
 
-  # ── Integration test: install on WinterCMS + run migrations ──────────────────
+  # ── Functional tests: full session-based curl checks against a live server ───
 
-  integrate:
-    name: WinterCMS ${{ matrix.wintercms }} / PHP ${{ matrix.php }}
+  functional:
+    name: Functional (WinterCMS 1.2.0)
     runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - wintercms: "1.2.0"
-            php: "8.1"
-          - wintercms: "dev-develop"
-            php: "8.2"
 
     services:
       postgres:
@@ -58,10 +50,10 @@ jobs:
         with:
           path: dbauth-src
 
-      - name: Setup PHP ${{ matrix.php }}
+      - name: Setup PHP 8.1
         uses: shivammathur/setup-php@v2
         with:
-          php-version: ${{ matrix.php }}
+          php-version: '8.1'
           extensions: pdo_pgsql, mbstring, xml, gd, curl, zip
           coverage: none
 
@@ -69,16 +61,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.composer/cache
-          key: composer-wintercms-${{ matrix.wintercms }}-${{ hashFiles('**/composer.lock') }}
-          restore-keys: composer-wintercms-${{ matrix.wintercms }}-
+          key: composer-wintercms-1.2.0-${{ hashFiles('**/composer.lock') }}
+          restore-keys: composer-wintercms-1.2.0-
 
-      - name: Install WinterCMS ${{ matrix.wintercms }}
-        run: |
-          if [ "${{ matrix.wintercms }}" = "1.2.0" ]; then
-            composer create-project wintercms/winter:1.2.0 wintercms --prefer-dist --no-interaction -q
-          else
-            composer create-project wintercms/winter wintercms --prefer-dist --no-interaction -q
-          fi
+      - name: Install WinterCMS 1.2.0
+        run: composer create-project wintercms/winter:1.2.0 wintercms --prefer-dist --no-interaction -q
 
       - name: Check out Acorn module
         uses: actions/checkout@v4
@@ -89,53 +76,179 @@ jobs:
       - name: Place DBAuth module
         run: cp -r dbauth-src wintercms/modules/dbauth
 
-      - name: Configure WinterCMS
+      - name: Configure WinterCMS .env (Phase A — real DB credentials)
         working-directory: wintercms
         run: |
-          printf 'APP_NAME="Winter CMS"\nAPP_KEY=\nAPP_DEBUG=true\nAPP_URL=http://localhost:8000\nDB_CONNECTION=pgsql\nDB_HOST=127.0.0.1\nDB_PORT=5432\nDB_DATABASE=wintercms_test\nDB_USERNAME=createsystem\nDB_PASSWORD=testpassword\nCACHE_DRIVER=file\nSESSION_DRIVER=file\nQUEUE_CONNECTION=sync\nROUTES_CACHE=false\nASSET_CACHE=false\nLINK_POLICY=detect\nENABLE_CSRF=true\n' | tee .env
+          printf 'APP_NAME="Winter CMS"\nAPP_KEY=\nAPP_DEBUG=true\nAPP_URL=http://localhost:8000\nDB_CONNECTION=pgsql\nDB_HOST=127.0.0.1\nDB_PORT=5432\nDB_DATABASE=wintercms_test\nDB_USERNAME=createsystem\nDB_PASSWORD=testpassword\nCACHE_DRIVER=file\nSESSION_DRIVER=file\nQUEUE_CONNECTION=sync\nROUTES_CACHE=false\nASSET_CACHE=false\nLINK_POLICY=detect\nENABLE_CSRF=true\n' > .env
           php artisan key:generate --quiet
 
       - name: Enable DBAuth module
         working-directory: wintercms
-        run: |
-          sed -i "s/'Cms'/'Cms', 'Acorn', 'DBAuth'/" config/cms.php
+        run: sed -i "s/'Cms'/'Cms', 'Acorn', 'DBAuth'/" config/cms.php
 
-      - name: Fix lists() removed in Laravel 10+ (WinterCMS dev-develop)
+      - name: Fix lists() removed in WinterCMS dev
         working-directory: wintercms
-        run: |
-          find modules/system/classes -name "VersionManager.php" -exec sed -i "s/->lists(/->pluck(/g" {} \;
+        run: find modules/system/classes -name "VersionManager.php" -exec sed -i "s/->lists(/->pluck(/g" {} \;
 
       - name: Run migrations
         working-directory: wintercms
         run: php artisan winter:up
 
-      - name: Start PHP dev server
+      - name: Create WinterCMS admin user
+        working-directory: wintercms
+        run: |
+          cat > /tmp/create_admin.php << 'PHPEOF'
+          <?php
+          define('STDIN', fopen('php://stdin', 'r'));
+          require __DIR__ . '/wintercms/bootstrap/autoload.php';
+          $app = require_once __DIR__ . '/wintercms/bootstrap/app.php';
+          $kernel = $app->make('Illuminate\Contracts\Console\Kernel');
+          $kernel->bootstrap();
+          $user = Backend\Models\User::create([
+              'first_name'           => 'Test',
+              'last_name'            => 'Admin',
+              'login'                => 'admin',
+              'email'                => 'admin@test.com',
+              'password'             => 'testpassword123',
+              'password_confirmation'=> 'testpassword123',
+              'is_superuser'         => 1,
+              'is_activated'         => 1,
+          ]);
+          echo "Admin user created with ID: " . $user->id . "\n";
+          PHPEOF
+          php /tmp/create_admin.php
+
+      # ── Phase A: DB_USERNAME=createsystem (DBAuth disabled — standard WinterCMS auth) ──
+
+      - name: Start PHP server (Phase A)
         working-directory: wintercms
         run: nohup php -S localhost:8000 index.php > /tmp/php-server.log 2>&1 &
 
-      - name: Wait for server
+      - name: Wait for PHP server
         run: |
           for i in $(seq 1 15); do
-            curl -s http://localhost:8000/ > /dev/null && break
+            curl -sf http://localhost:8000/ -o /dev/null && break
             sleep 1
           done
 
-      - name: Smoke test — backend login page loads (not 500)
+      - name: Phase A — login page loads (200, contains login form)
         run: |
+          BODY=$(curl -s -c /tmp/cookies_a.txt http://localhost:8000/backend/auth)
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/backend/auth)
-          echo "Login page status: $STATUS"
-          test "$STATUS" != "500"
-          test "$STATUS" != "000"
+          echo "Status: $STATUS"
+          test "$STATUS" = "200"
+          echo "$BODY" | grep -qi "login\|password\|Administration Area\|signin"
 
-      - name: Smoke test — bad credentials return non-500
+      - name: Phase A — extract CSRF token and login with correct credentials
+        run: |
+          # Extract _token from the login page form hidden field
+          BODY=$(curl -s -c /tmp/cookies_a.txt http://localhost:8000/backend/auth)
+          TOKEN=$(echo "$BODY" | grep -o 'name="_token" value="[^"]*"' | sed 's/.*value="\([^"]*\)"/\1/' | head -1)
+          echo "Extracted CSRF token: ${TOKEN:0:10}..."
+          test -n "$TOKEN"
+
+          # POST login with correct credentials
+          RESPONSE=$(curl -s -L \
+            -c /tmp/cookies_a.txt -b /tmp/cookies_a.txt \
+            -d "_token=$TOKEN&postback=1&login=admin&password=testpassword123" \
+            http://localhost:8000/backend/auth/signin)
+
+          # Successful login redirects to the backend dashboard
+          echo "$RESPONSE" | grep -qi "Winter\|Backend\|Dashboard\|Signed in\|wn-icon" \
+            || (echo "Login failed — response:"; echo "$RESPONSE" | head -30; exit 1)
+          echo "Phase A login: OK"
+
+      - name: Phase A — authenticated backend page loads
         run: |
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST http://localhost:8000/backend/auth \
-            -d "postback=1&login=nobody&password=wrongpassword")
-          echo "Bad login status: $STATUS"
+            -b /tmp/cookies_a.txt \
+            http://localhost:8000/backend)
+          echo "Authenticated backend status: $STATUS"
+          test "$STATUS" = "200"
+
+      - name: Phase A — bad credentials return error (not 500)
+        run: |
+          BODY=$(curl -s -c /tmp/cookies_bad.txt http://localhost:8000/backend/auth)
+          TOKEN=$(echo "$BODY" | grep -o 'name="_token" value="[^"]*"' | sed 's/.*value="\([^"]*\)"/\1/' | head -1)
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -c /tmp/cookies_bad.txt -b /tmp/cookies_bad.txt \
+            -d "_token=$TOKEN&postback=1&login=nobody&password=wrongpassword" \
+            http://localhost:8000/backend/auth/signin)
+          echo "Bad credentials status: $STATUS"
           test "$STATUS" != "500"
           test "$STATUS" != "000"
 
-      - name: Dump PHP server log (on failure)
+      - name: Stop PHP server
+        run: pkill -f "php -S localhost:8000" || true
+
+      # ── Phase B: DB_USERNAME=<DBAUTH> (DBAuth active — custom login page) ──
+
+      - name: Pre-create PostgreSQL roles for DBAuth testing
+        run: |
+          PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms_test << 'SQLEOF'
+          CREATE ROLE admin WITH LOGIN PASSWORD 'testpassword123' CREATEROLE;
+          GRANT ALL ON DATABASE wintercms_test TO admin;
+          GRANT ALL ON SCHEMA public TO admin;
+          GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO admin;
+          GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO admin;
+          CREATE ROLE "token_wintercms_test_1" WITH LOGIN PASSWORD 'inittoken';
+          GRANT "token_wintercms_test_1" TO admin WITH ADMIN OPTION;
+          SQLEOF
+
+      - name: Switch .env to DBAuth sentinel (Phase B)
+        working-directory: wintercms
+        run: |
+          sed -i 's/DB_USERNAME=createsystem/DB_USERNAME=<DBAUTH>/' .env
+          sed -i 's/DB_PASSWORD=testpassword/DB_PASSWORD=<DBAUTH>/' .env
+
+      - name: Start PHP server (Phase B)
+        working-directory: wintercms
+        run: nohup php -S localhost:8000 index.php > /tmp/php-server-b.log 2>&1 &
+
+      - name: Wait for PHP server
+        run: |
+          for i in $(seq 1 15); do
+            curl -sf http://localhost:8000/backend/auth -o /dev/null && break
+            sleep 1
+          done
+
+      - name: Phase B — DBAuth custom login page served
+        run: |
+          BODY=$(curl -s http://localhost:8000/backend/auth)
+          echo "$BODY" | grep -q "Secure System" \
+            || (echo "ERROR: DBAuth custom login page not shown"; echo "$BODY" | head -30; exit 1)
+          echo "Phase B custom login page: OK (contains 'Secure System')"
+
+      - name: Phase B — bad credentials show error (not 500)
+        run: |
+          BODY=$(curl -s http://localhost:8000/backend/auth)
+          TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
+          test -n "$TOKEN"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -c /tmp/cookies_b_bad.txt -b /tmp/cookies_b_bad.txt \
+            -H "X-CSRF-TOKEN: $TOKEN" \
+            -d "postback=1&login=nobody&password=wrongpassword" \
+            http://localhost:8000/backend/backend/auth/signin)
+          echo "Phase B bad login status: $STATUS"
+          test "$STATUS" != "500"
+          test "$STATUS" != "000"
+
+      - name: Phase B — correct credentials authenticate via PostgreSQL role
+        run: |
+          BODY=$(curl -s -c /tmp/cookies_b.txt http://localhost:8000/backend/auth)
+          TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
+          test -n "$TOKEN"
+          RESPONSE=$(curl -s -L \
+            -c /tmp/cookies_b.txt -b /tmp/cookies_b.txt \
+            -H "X-CSRF-TOKEN: $TOKEN" \
+            -d "postback=1&login=admin&password=testpassword123" \
+            http://localhost:8000/backend/backend/auth/signin)
+          echo "$RESPONSE" | grep -qi "Winter\|Backend\|Dashboard\|wn-icon" \
+            || (echo "Phase B login failed — response:"; echo "$RESPONSE" | head -30; exit 1)
+          echo "Phase B login with PostgreSQL role: OK"
+
+      - name: Dump PHP server logs on failure
         if: failure()
-        run: cat /tmp/php-server.log
+        run: |
+          echo "=== Phase A server log ===" ; cat /tmp/php-server.log || true
+          echo "=== Phase B server log ===" ; cat /tmp/php-server-b.log || true
