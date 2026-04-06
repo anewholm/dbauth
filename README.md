@@ -36,7 +36,7 @@ DBAuth is fundamentally built on PostgreSQL's `CREATEROLE`, `GRANT`, and Row Lev
 
 - WinterCMS 1.2+ installed
 - [Acorn module](https://github.com/anewholm/acorn) installed as `modules/acorn`
-- PostgreSQL 12+ with a superuser account (needed during installation to create roles)
+- PostgreSQL 16+ with a superuser account (needed during installation to create roles)
 
 ## Installation
 
