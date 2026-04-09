@@ -146,9 +146,9 @@ jobs:
 
       - name: Phase A — extract CSRF token and login with correct credentials
         run: |
-          # Extract _token from the login page form hidden field
+          # Extract CSRF token from meta tag (same layout for Phase A and B)
           BODY=$(curl -s -L -c /tmp/cookies_a.txt http://localhost:8000/backend/backend/auth/signin)
-          TOKEN=$(echo "$BODY" | grep -o 'name="_token" value="[^"]*"' | sed 's/.*value="\([^"]*\)"/\1/' | head -1)
+          TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
           echo "Extracted CSRF token: ${TOKEN:0:10}..."
           test -n "$TOKEN"
 
@@ -174,7 +174,7 @@ jobs:
       - name: Phase A — bad credentials return error (not 500)
         run: |
           BODY=$(curl -s -L -c /tmp/cookies_bad.txt http://localhost:8000/backend/backend/auth/signin)
-          TOKEN=$(echo "$BODY" | grep -o 'name="_token" value="[^"]*"' | sed 's/.*value="\([^"]*\)"/\1/' | head -1)
+          TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -c /tmp/cookies_bad.txt -b /tmp/cookies_bad.txt \
             -d "_token=$TOKEN&postback=1&login=nobody&password=wrongpassword" \
