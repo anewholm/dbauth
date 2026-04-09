@@ -131,14 +131,14 @@ jobs:
       - name: Wait for PHP server
         run: |
           for i in $(seq 1 15); do
-            curl -sf http://localhost:8000/backend/auth -o /dev/null && break
+            curl -sf http://localhost:8000/backend/backend/auth -o /dev/null && break
             sleep 1
           done
 
       - name: Phase A — login page loads (200, contains login form)
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/backend/auth)
-          BODY=$(curl -s -c /tmp/cookies_a.txt http://localhost:8000/backend/auth)
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/backend/backend/auth)
+          BODY=$(curl -s -c /tmp/cookies_a.txt http://localhost:8000/backend/backend/auth)
           echo "Status: $STATUS"
           echo "Body preview: ${BODY:0:400}"
           test "$STATUS" = "200"
@@ -147,7 +147,7 @@ jobs:
       - name: Phase A — extract CSRF token and login with correct credentials
         run: |
           # Extract _token from the login page form hidden field
-          BODY=$(curl -s -c /tmp/cookies_a.txt http://localhost:8000/backend/auth)
+          BODY=$(curl -s -c /tmp/cookies_a.txt http://localhost:8000/backend/backend/auth)
           TOKEN=$(echo "$BODY" | grep -o 'name="_token" value="[^"]*"' | sed 's/.*value="\([^"]*\)"/\1/' | head -1)
           echo "Extracted CSRF token: ${TOKEN:0:10}..."
           test -n "$TOKEN"
@@ -156,7 +156,7 @@ jobs:
           RESPONSE=$(curl -s -L \
             -c /tmp/cookies_a.txt -b /tmp/cookies_a.txt \
             -d "_token=$TOKEN&postback=1&login=admin&password=testpassword123" \
-            http://localhost:8000/backend/auth/signin)
+            http://localhost:8000/backend/backend/auth/signin)
 
           # Successful login redirects to the backend dashboard
           echo "$RESPONSE" | grep -qi "Winter\|Backend\|Dashboard\|Signed in\|wn-icon" \
@@ -173,18 +173,18 @@ jobs:
 
       - name: Phase A — bad credentials return error (not 500)
         run: |
-          BODY=$(curl -s -c /tmp/cookies_bad.txt http://localhost:8000/backend/auth)
+          BODY=$(curl -s -c /tmp/cookies_bad.txt http://localhost:8000/backend/backend/auth)
           TOKEN=$(echo "$BODY" | grep -o 'name="_token" value="[^"]*"' | sed 's/.*value="\([^"]*\)"/\1/' | head -1)
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -c /tmp/cookies_bad.txt -b /tmp/cookies_bad.txt \
             -d "_token=$TOKEN&postback=1&login=nobody&password=wrongpassword" \
-            http://localhost:8000/backend/auth/signin)
+            http://localhost:8000/backend/backend/auth/signin)
           echo "Bad credentials status: $STATUS"
           test "$STATUS" != "500"
           test "$STATUS" != "000"
 
       - name: Stop PHP server
-        run: pkill -f "php -S localhost:8000" || true
+        run: pkill -f "artisan" || true
 
       # ── Phase B: DB_USERNAME=<DBAUTH> (DBAuth active — custom login page) ──
 
@@ -213,20 +213,20 @@ jobs:
       - name: Wait for PHP server
         run: |
           for i in $(seq 1 15); do
-            curl -sf http://localhost:8000/backend/auth -o /dev/null && break
+            curl -sf http://localhost:8000/backend/backend/auth -o /dev/null && break
             sleep 1
           done
 
       - name: Phase B — DBAuth custom login page served
         run: |
-          BODY=$(curl -s http://localhost:8000/backend/auth)
+          BODY=$(curl -s http://localhost:8000/backend/backend/auth)
           echo "$BODY" | grep -q "Secure System" \
             || (echo "ERROR: DBAuth custom login page not shown"; echo "$BODY" | head -30; exit 1)
           echo "Phase B custom login page: OK (contains 'Secure System')"
 
       - name: Phase B — bad credentials show error (not 500)
         run: |
-          BODY=$(curl -s http://localhost:8000/backend/auth)
+          BODY=$(curl -s http://localhost:8000/backend/backend/auth)
           TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
           test -n "$TOKEN"
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -240,7 +240,7 @@ jobs:
 
       - name: Phase B — correct credentials authenticate via PostgreSQL role
         run: |
-          BODY=$(curl -s -c /tmp/cookies_b.txt http://localhost:8000/backend/auth)
+          BODY=$(curl -s -c /tmp/cookies_b.txt http://localhost:8000/backend/backend/auth)
           TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
           test -n "$TOKEN"
           RESPONSE=$(curl -s -L \
