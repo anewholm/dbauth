@@ -139,16 +139,15 @@ class ServiceProvider extends ModuleServiceProvider
                 return $connFactory->make($config, $name);
             });
 
-            // Immediately test the connection
-            // Note that the authorisation procedure has not happend yet
-            // and we cannot get the username / id yet from session
-            // TODO: Should this test be only APP_DEBUG?
+            // Immediately test the connection to surface auth/permission errors early.
+            // Note: authorisation has not happened yet — we cannot get username/id from session.
+            // Use SELECT 1 (no table dependency) so login is never gated on an optional plugin
+            // table such as winter_translate_messages (translate plugin — not always installed).
             try {
-                // Force reconnect to trigger the pgsql extend above
-                // We use winter_translate_attributes because it is necessary for frontend default user
-                // and we want to catch any problems it might have
+                // Force reconnect to trigger the pgsql extend above on console (artisan serve).
+                // For web requests runningInConsole() is false — the connection is made lazily.
                 if ($this->app->runningInConsole()) DB::reconnect();
-                DB::unprepared("select 1 from winter_translate_messages limit 1");
+                DB::unprepared("select 1");
             } catch (QueryException $ex) {
                 // If it is running in the front-end
                 // then showLoginScreen() will simply throw the exception

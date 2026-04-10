@@ -97,36 +97,17 @@ jobs:
         working-directory: wintercms
         run: php artisan winter:up
 
-      - name: Set admin user password
-        working-directory: wintercms
-        run: |
-          cat > set_admin_pwd.php << 'PHPEOF'
-          <?php
-          define('STDIN', fopen('php://stdin', 'r'));
-          require __DIR__ . '/bootstrap/autoload.php';
-          $app = require_once __DIR__ . '/bootstrap/app.php';
-          $kernel = $app->make('Illuminate\Contracts\Console\Kernel');
-          $kernel->bootstrap();
-          // The backend seeder creates admin with an empty password; update it.
-          $user = Backend\Models\User::where('login', 'admin')->firstOrFail();
-          $user->password = 'testpassword123';
-          $user->password_confirmation = 'testpassword123';
-          $user->forceSave();
-          echo "Admin password set, user ID: " . $user->id . "\n";
-          PHPEOF
-          php set_admin_pwd.php
-          rm set_admin_pwd.php
-
-      # ── Pre-create PostgreSQL roles (required by both phases) ─────────────────
+      # ── Set up DBAuth roles and sync admin password ───────────────────────────
+      # dbauth:setup-access creates the named PG role (admin) and token role,
+      # sets the cross-grant, enables auto_create_db_user, and syncs the password
+      # to backend_users — replacing the old separate "Set admin user password"
+      # inline PHP script. Also creates the "artisan" role for ARTISAN_AUTO_LOGIN.
+      #
       # DBAuth's register() unconditionally intercepts all pgsql connections,
       # even when DB_USERNAME != <DBAUTH>. On a login POST it substitutes the
       # form credentials, so the 'admin' role must exist before Phase A tests.
-      #
-      # dbauth:setup-access handles all role creation, grants, cross-grants, and
-      # the auto_create_db_user setting in one place. It also creates the "artisan"
-      # role used by ARTISAN_AUTO_LOGIN when DB_USERNAME=<DBAUTH> (Phase B).
 
-      - name: Pre-create PostgreSQL roles for DBAuth
+      - name: Set up DBAuth roles and admin credentials
         working-directory: wintercms
         run: php artisan dbauth:setup-access --login=admin --password=testpassword123 --enable-auto-create --artisan-role --artisan-password=testpassword
 

@@ -510,10 +510,27 @@ class SetupAccess extends Command
         // Check schema USAGE privilege.
         $this->checkSchemaGrant($login);
 
-        // If not check-only and password supplied, update the password.
+        // If not check-only and password supplied, update both PG role and backend_users.
+        // Keeping them in sync here means the CI "Set admin user password" step can be
+        // replaced by a single dbauth:setup-access call (no separate inline PHP script).
         if (!$this->checkOnly && $password) {
             DBManager::updateDBPassword($password, $login);
-            $this->info("  [✓] Password updated for \"$login\".");
+            $this->info("  [✓] PG role password updated for \"$login\".");
+
+            // Sync backend_users.password so WinterCMS auth matches the PG role.
+            // Uses forceSave() to bypass validation (e.g. WinterCMS seeder creates
+            // the admin user with an empty password; normal save() would reject it).
+            try {
+                $user = BackendUser::where('login', $login)->first();
+                if ($user) {
+                    $user->password              = $password;
+                    $user->password_confirmation = $password;
+                    $user->forceSave();
+                    $this->info("  [✓] backend_users password synced for \"$login\".");
+                }
+            } catch (Exception $ex) {
+                $this->warn("  [!] Could not sync backend_users password: " . $ex->getMessage());
+            }
         }
     }
 
