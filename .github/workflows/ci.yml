@@ -229,14 +229,21 @@ jobs:
       - name: Phase B — correct credentials authenticate via PostgreSQL role
         run: |
           # GET the login page first to establish a session and obtain the CSRF token.
-          # Form::open() and the csrf-token meta tag both carry the session token.
-          # DBAuth respects ENABLE_CSRF=true, so the token must be sent in the POST.
-          # Do NOT follow redirect (-L) on the POST: 302 is sufficient proof of success.
-          BODY=$(curl -s -L -c /tmp/cookies_b.txt -b /tmp/cookies_b.txt \
-            http://localhost:8000/backend/backend/auth/signin)
+          # DBAuth serves its own login page via include()+exit(0), bypassing the normal
+          # Laravel response dispatch. This means StartSession's Set-Cookie header (added
+          # to the Response object) is never sent; DBAuth calls PHP setcookie() directly
+          # to ensure the browser gets the session cookie before the POST.
+          # Show verbose headers on the GET so CI logs confirm the Set-Cookie is present.
+          echo "=== Phase B GET headers ==="
+          curl -s -D - -L -c /tmp/cookies_b.txt -b /tmp/cookies_b.txt \
+            http://localhost:8000/backend/backend/auth/signin -o /tmp/phase_b_body.html
+          echo "=== Cookie jar after GET ==="
+          cat /tmp/cookies_b.txt
+          BODY=$(cat /tmp/phase_b_body.html)
           TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
           echo "Phase B CSRF token: ${TOKEN:0:10}..."
           test -n "$TOKEN"
+          # Do NOT follow redirect (-L) on the POST: 302 is sufficient proof of success.
           LOGINRESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
             -c /tmp/cookies_b.txt -b /tmp/cookies_b.txt \
             --data-urlencode "_token=$TOKEN" \
