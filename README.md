@@ -1,7 +1,7 @@
 # DBAuth — Database-credential login for WinterCMS
 
 ![Human made content](human-made-content.png "Human made content")
-[![CI](https://github.com/anewholm/dbauth/actions/workflows/ci.yml/badge.svg)](https://github.com/anewholm/dbauth/actions/workflows/ci.yml)  \(Currently being actively updated with a full curl-based test-suite. Watch this space\)
+[![CI](https://github.com/anewholm/dbauth/actions/workflows/ci.yml/badge.svg)](https://github.com/anewholm/dbauth/actions/workflows/ci.yml)  \(CI contains a full curl-based test-suite\)
 
 > **Note:** CodeQL security scanning is unfortunately not available for PHP on GitHub's free tier.
 
