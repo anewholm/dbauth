@@ -218,11 +218,12 @@ class ServiceProvider extends ModuleServiceProvider
         parent::boot();
     }
 
-    public function checkCreateBackendUser(string $username, string $password): User
+    public function checkCreateBackendUser(string $username, string $password): ?User
     {
         // Database connection was successful
         // with a PostGres DB user with the sent user/pass
         // Backend\Models\User (backend_users)
+        $user = null;
         $autoCreateBackendUser = (Settings::get('auto_create_backend_user') == '1');
         if ($autoCreateBackendUser) {
             $user = User::where('login', '=', $username)->first();
