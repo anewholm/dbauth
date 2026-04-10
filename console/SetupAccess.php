@@ -52,6 +52,17 @@ use Winter\Storm\Console\Command;
  *     GRANT UPDATE ON acorn_user_users TO frontend;
  *   Set DBAUTH_FRONTEND_USER=frontend and DBAUTH_FRONTEND_PASSWORD=<pwd> in .env.
  *
+ * Production promotion (--promote):
+ *   Hardens the DBAuth configuration for production. Run while still in Phase A
+ *   (DB_USERNAME=real superuser) so artisan has full DB access. Handles:
+ *     - Pre-flight --check (aborts if anything is broken)
+ *     - Set admin production password (PG role + backend_users)
+ *     - Remove ARTISAN_AUTO_LOGIN and ARTISAN_DEV_PASSWORD from .env
+ *     - Set APP_DEBUG=false and APP_ENV=production in .env
+ *     - Drop the "artisan" PG role (dev-only convenience role)
+ *     - Drop "createsystem" and "demo" roles when --drop-dev-roles is passed
+ *   OS-level steps (Xdebug, Apache config) are left to acorn-promote-system.
+ *
  * Usage examples:
  *   # Initial setup (Phase A — DB_USERNAME=createsystem superuser):
  *   php artisan dbauth:setup-access --login=admin --password=adminpass --enable-auto-create
@@ -65,6 +76,9 @@ use Winter\Storm\Console\Command;
  *
  *   # Set up / re-sync a specific user (equivalent to winter:passwd for DBAuth):
  *   php artisan dbauth:setup-access --login=john --password=newpass
+ *
+ *   # Promote to production (harden DBAuth-owned settings and roles):
+ *   php artisan dbauth:setup-access --promote --login=admin --password=prodpass --drop-dev-roles
  */
 class SetupAccess extends Command
 {
@@ -85,6 +99,8 @@ class SetupAccess extends Command
         {--enable-auto-create : Enable the auto_create_db_user DBAuth setting}
         {--artisan-role       : Create/verify the "artisan" role for ARTISAN_AUTO_LOGIN}
         {--artisan-password=  : Password for the artisan role (defaults to --password)}
+        {--promote            : Harden this installation for production (see class docblock)}
+        {--drop-dev-roles     : Also drop createsystem and demo PG roles (use with --promote)}
     ';
 
     /**
@@ -112,6 +128,11 @@ class SetupAccess extends Command
         $login           = $this->option('login') ?: 'admin';
         $password        = $this->option('password');
         $idOption        = $this->option('id');
+
+        // --promote is a distinct mode; dispatch immediately.
+        if ($this->option('promote')) {
+            return $this->promoteToProduction($login, $password);
+        }
 
         $mode = $this->checkOnly ? '<comment>CHECK</comment>' : '<info>SETUP</info>';
         $this->line("DBAuth access $mode — login: <info>$login</info>");
@@ -193,6 +214,203 @@ class SetupAccess extends Command
         }
 
         $this->warn("{$this->issues} warning(s). Review output above.");
+        return 0;
+    }
+
+    // =========================================================================
+    // Production promotion
+    // =========================================================================
+
+    /**
+     * Harden the DBAuth-owned configuration for production deployment.
+     *
+     * Sequence (order matters):
+     *   1. Pre-flight --check  — abort if the installation is broken
+     *   2. Set production admin password on PG role and backend_users
+     *   3. Harden .env         — remove dev settings, set APP_DEBUG=false
+     *   4. Drop dev PG roles   — artisan always; createsystem/demo with --drop-dev-roles
+     *   5. Final --check       — confirm production state is valid
+     *
+     * Run this while DB_USERNAME is still a superuser (Phase A) so artisan
+     * has full DB access for steps 1–2. After step 3 removes ARTISAN_AUTO_LOGIN,
+     * subsequent artisan runs in Phase B will require a DB user other than artisan.
+     */
+    private function promoteToProduction(string $login, ?string $password): int
+    {
+        $this->line('');
+        $this->line('<comment>DBAuth production promotion</comment>');
+        $this->line('Hardens DBAuth-owned .env settings and PostgreSQL roles.');
+        $this->line('OS-level steps (Xdebug, Apache) are handled by acorn-promote-system.');
+        $this->line('');
+
+        // ── Pre-flight ────────────────────────────────────────────────────────
+        // Run all standard checks in check-only mode. If anything is broken,
+        // promotion could leave the system unreachable — abort and fix first.
+        $this->line('<comment>[Pre-flight]</comment> Verifying installation...');
+        $savedCheckOnly = $this->checkOnly;
+        $savedIssues    = $this->issues;
+        $this->checkOnly = true;
+        $this->issues    = 0;
+
+        $this->checkSentinel();
+        $userId = $this->resolveUserId($login);
+        $this->checkNamedRole($login, null);
+        if ($userId) {
+            $database   = DBManager::configDatabase('database');
+            $tokenLogin = "token_{$database}_{$userId}";
+            $this->checkTokenRole($tokenLogin, $login);
+        }
+        $this->checkAutoCreateSetting();
+
+        $preflightIssues = $this->issues;
+        $this->checkOnly = $savedCheckOnly;
+        $this->issues    = $savedIssues;
+
+        if ($preflightIssues > 0) {
+            $this->error("Pre-flight failed ($preflightIssues issue(s)). Fix with: php artisan dbauth:setup-access");
+            $this->line('  Promotion aborted — no changes made.');
+            return 1;
+        }
+        $this->info('  Pre-flight passed.');
+        $this->line('');
+
+        // ── Admin password ────────────────────────────────────────────────────
+        // Set a strong production password on both the PostgreSQL role and the
+        // backend_users record. Both must match for login to succeed.
+        // Must happen BEFORE we drop dev roles — artisan needs a DB connection.
+        $this->line('<comment>[1]</comment> Production admin password...');
+
+        if (!$password) {
+            $password = $this->secret("  New production password for \"$login\"");
+            $confirm  = $this->secret("  Confirm password");
+            if ($password !== $confirm) {
+                $this->error('  Passwords do not match. Promotion aborted.');
+                return 1;
+            }
+        }
+
+        // Update the PostgreSQL role password.
+        DBManager::updateDBPassword($password, $login);
+        $this->info("  [✓] PG role \"$login\" password updated.");
+
+        // Update backend_users password so WinterCMS auth matches the PG role.
+        try {
+            $user = BackendUser::where('login', $login)->firstOrFail();
+            $user->password              = $password;
+            $user->password_confirmation = $password;
+            $user->forceSave();
+            $this->info("  [✓] backend_users password updated for \"$login\".");
+        } catch (Exception $ex) {
+            $this->warn("  [!] Could not update backend_users: " . $ex->getMessage());
+        }
+        $this->line('');
+
+        // ── Harden .env ───────────────────────────────────────────────────────
+        // Remove ARTISAN_AUTO_LOGIN and ARTISAN_DEV_PASSWORD — these are
+        // development conveniences that must not exist in production. Without them,
+        // artisan in Phase B will prompt for credentials on the console, which is
+        // intentional security behaviour: production artisan access requires
+        // explicit credential entry.
+        //
+        // Set APP_DEBUG=false so stack traces and DB errors are never exposed
+        // to the browser. Set APP_ENV=production for Laravel's environment-aware
+        // behaviour (cache settings, error handling, etc.).
+        $this->line('<comment>[2]</comment> Hardening .env...');
+        $envPath = app()->environmentFilePath();
+        $content = file_get_contents($envPath);
+        $envBackup = $envPath . '.pre-promote.bak';
+        file_put_contents($envBackup, $content);
+        $this->line("  Backup: $envBackup");
+
+        $changes = [
+            // Remove dev-only artisan connection bypass.
+            'ARTISAN_AUTO_LOGIN'   => null,   // null = remove the line entirely
+            'ARTISAN_DEV_PASSWORD' => null,
+            // Remove flag that loosens base-dir restriction.
+            'RESTRICT_BASE_DIR'    => null,
+            // Standard Laravel production hardening.
+            'APP_DEBUG'            => 'false',
+            'APP_ENV'              => 'production',
+        ];
+
+        foreach ($changes as $key => $value) {
+            if (is_null($value)) {
+                // Remove the line entirely.
+                if (preg_match("/^{$key}=/m", $content)) {
+                    $content = preg_replace("/^{$key}=.*\n?/m", '', $content);
+                    $this->info("  [✓] Removed $key from .env.");
+                }
+            } else {
+                // Set or update the value.
+                if (preg_match("/^{$key}=/m", $content)) {
+                    $content = preg_replace("/^{$key}=.*/m", "$key=$value", $content);
+                } else {
+                    $content .= "\n$key=$value\n";
+                }
+                $this->info("  [✓] Set $key=$value in .env.");
+            }
+        }
+
+        file_put_contents($envPath, $content);
+        $this->line('');
+
+        // ── Drop development PostgreSQL roles ─────────────────────────────────
+        // The "artisan" role was created by --artisan-role for development use
+        // only. It must be dropped in production — even without SUPERUSER it
+        // represents an additional attack surface.
+        //
+        // "createsystem" and "demo" are setup/demo roles (created by
+        // acorn-setup-database and winter:fresh respectively). Drop them with
+        // --drop-dev-roles when ready to remove all dev access.
+        $this->line('<comment>[3]</comment> Dropping development PostgreSQL roles...');
+
+        $devRoles = ['artisan'];
+        if ($this->option('drop-dev-roles')) {
+            $devRoles = array_merge($devRoles, ['createsystem', 'demo']);
+            $this->line('  (--drop-dev-roles: also dropping createsystem and demo)');
+        }
+
+        foreach ($devRoles as $role) {
+            if (DBManager::dbUserExists($role)) {
+                DBManager::checkDropDBUser($role);
+                $this->info("  [✓] Dropped PG role: $role");
+            } else {
+                $this->line("  (skipped: \"$role\" does not exist)");
+            }
+        }
+        $this->line('');
+
+        // ── Final verification ────────────────────────────────────────────────
+        // Re-run checks to confirm the promoted state is valid.
+        // Note: ARTISAN_AUTO_LOGIN is now gone, so the artisan startup check
+        // will correctly report it as absent (that is the desired production state).
+        $this->line('<comment>[4]</comment> Final verification...');
+        $this->checkOnly = true;
+        $this->issues    = 0;
+
+        $this->checkNamedRole($login, null);
+        if ($userId) {
+            $this->checkTokenRole($tokenLogin, $login);
+        }
+        $this->checkAutoCreateSetting();
+
+        $finalIssues  = $this->issues;
+        $this->checkOnly = false;
+        $this->issues    = 0;
+
+        $this->line('');
+        if ($finalIssues === 0) {
+            $this->info('Production promotion complete.');
+            $this->line('');
+            $this->line('Remaining OS-level steps (run acorn-promote-system):');
+            $this->line('  - Disable Xdebug and reload Apache');
+            $this->line('  - Review PHP ini and Apache vhost for production values');
+            $this->line('  - Clear demo data: php artisan winter:fresh');
+            $this->line('  - Rotate APP_KEY if this is a copy of a dev environment');
+        } else {
+            $this->warn("Promotion complete with $finalIssues warning(s) — review output above.");
+        }
+
         return 0;
     }
 
