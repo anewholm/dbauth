@@ -36,6 +36,8 @@ use Winter\Storm\Console\Command;
  *   value. Set ARTISAN_AUTO_LOGIN=1 and ARTISAN_DEV_PASSWORD=<password> in .env
  *   and create an "artisan" PostgreSQL role with database access so that artisan
  *   commands (including this one) can run without interactive prompting.
+ *   The "artisan" role name is hardcoded in ServiceProvider::showLoginScreen().
+ *   The artisan role must NOT have SUPERUSER — it only needs database access.
  *
  * Frontend user (informational — not managed by this command):
  *   An unprivileged "frontend" role connects for all non-backend HTTP requests.
@@ -54,9 +56,9 @@ use Winter\Storm\Console\Command;
  *   # Initial setup (Phase A — DB_USERNAME=createsystem superuser):
  *   php artisan dbauth:setup-access --login=admin --password=adminpass --enable-auto-create
  *
- *   # Include artisan role for Phase B server startup:
+ *   # Include artisan role for Phase B server startup (auto-fix .env with --yes):
  *   php artisan dbauth:setup-access --login=admin --password=adminpass \
- *       --enable-auto-create --artisan-role --artisan-password=artisanpass
+ *       --enable-auto-create --artisan-role --artisan-password=artisanpass --yes
  *
  *   # Verify an existing installation:
  *   php artisan dbauth:setup-access --check
@@ -79,6 +81,7 @@ class SetupAccess extends Command
         {--password=          : Password for the named PostgreSQL role}
         {--id=                : backend_users.id for the token role (auto-detected if omitted)}
         {--check              : Verify setup only — report issues and exit 1 if any found}
+        {--yes                : Auto-fix all issues without confirmation (-y shorthand: use --yes)}
         {--enable-auto-create : Enable the auto_create_db_user DBAuth setting}
         {--artisan-role       : Create/verify the "artisan" role for ARTISAN_AUTO_LOGIN}
         {--artisan-password=  : Password for the artisan role (defaults to --password)}
@@ -89,10 +92,13 @@ class SetupAccess extends Command
      */
     protected $description = 'Set up and verify PostgreSQL roles and grants for DBAuth authentication';
 
-    /** @var bool Whether we are in check-only mode */
+    /** @var bool Whether we are in check-only mode (no writes). */
     private bool $checkOnly;
 
-    /** @var int Count of issues found during checks */
+    /** @var bool Whether to auto-fix without confirmation prompts. */
+    private bool $autoFix;
+
+    /** @var int Count of issues found during checks. */
     private int $issues = 0;
 
     /**
@@ -102,6 +108,7 @@ class SetupAccess extends Command
     public function handle(): int
     {
         $this->checkOnly = (bool) $this->option('check');
+        $this->autoFix   = (bool) $this->option('yes');
         $login           = $this->option('login') ?: 'admin';
         $password        = $this->option('password');
         $idOption        = $this->option('id');
@@ -160,17 +167,18 @@ class SetupAccess extends Command
             $this->checkAutoCreateSetting();
         }
 
-        // ── Step 6: Artisan role (for ARTISAN_AUTO_LOGIN) ─────────────────────
-        // When DB_USERNAME=<DBAUTH>, artisan cannot connect using the sentinel
-        // value. ServiceProvider::showLoginScreen() prompts interactively for
-        // credentials — which hangs non-interactive CI runs.
-        // Solution: set ARTISAN_AUTO_LOGIN=1 and ARTISAN_DEV_PASSWORD in .env,
-        // then create an "artisan" PostgreSQL role with database access.
-        // The "artisan" role name is hardcoded in ServiceProvider::showLoginScreen().
-        if ($this->option('artisan-role') || $this->checkOnly) {
-            $artisanPassword = $this->option('artisan-password') ?: $password;
-            $this->checkArtisanRole($artisanPassword);
-        }
+        // ── Step 6: Artisan startup configuration ─────────────────────────────
+        // When DB_USERNAME=<DBAUTH>, artisan cannot connect at startup using the
+        // sentinel value. Two things are needed:
+        //   a) ARTISAN_AUTO_LOGIN=1 and ARTISAN_DEV_PASSWORD in .env
+        //      — checked and optionally fixed here (with --yes to skip confirmation)
+        //   b) An "artisan" PostgreSQL role with database access
+        //      — created/verified when --artisan-role is passed
+        // The artisan role MUST NOT have SUPERUSER. In production environments it
+        // is common for an existing artisan/admin role to be a superuser — this
+        // command detects and removes that privilege.
+        $artisanPassword = $this->option('artisan-password') ?: $password;
+        $this->checkArtisanSetup($artisanPassword);
 
         // ── Summary ───────────────────────────────────────────────────────────
         $this->line('');
@@ -380,45 +388,49 @@ class SetupAccess extends Command
     }
 
     /**
-     * Check or create the "artisan" PostgreSQL role.
+     * Check the artisan startup configuration:
+     *   (a) ARTISAN_AUTO_LOGIN=1 and ARTISAN_DEV_PASSWORD in .env
+     *   (b) The "artisan" PostgreSQL role exists and is NOT SUPERUSER
      *
-     * When DB_USERNAME=<DBAUTH>, artisan cannot connect at startup using the
-     * sentinel value. ServiceProvider::showLoginScreen() uses username "artisan"
-     * (hardcoded) when ARTISAN_AUTO_LOGIN=1 is set in .env.
-     *
-     * The artisan role needs database access for artisan to run commands
-     * (migrations, winter:up, etc.) without interactive prompting.
-     *
-     * Required .env additions (Phase B):
-     *   ARTISAN_AUTO_LOGIN=1
-     *   ARTISAN_DEV_PASSWORD=<artisan-role-password>
+     * (a) is always checked/fixed (required whenever DB_USERNAME=<DBAUTH>).
+     * (b) is only created when --artisan-role is passed; existence and
+     *     SUPERUSER status are always checked in --check mode.
      */
-    private function checkArtisanRole(?string $password): void
+    private function checkArtisanSetup(?string $artisanPassword): void
     {
         $this->line('');
-        $this->line('  Artisan role: <info>artisan</info>');
+        $this->line('  Artisan startup configuration:');
 
-        if (!env('ARTISAN_AUTO_LOGIN')) {
-            $this->warn('  [!] ARTISAN_AUTO_LOGIN is not set in .env.');
-            $this->line('      Add ARTISAN_AUTO_LOGIN=1 and ARTISAN_DEV_PASSWORD=<password> to .env');
-            $this->line('      so artisan commands work when DB_USERNAME=<DBAUTH>.');
-            if ($this->checkOnly) $this->issues++;
-        } else {
-            $this->info('  [✓] ARTISAN_AUTO_LOGIN is set.');
+        // ── (a) .env ARTISAN_AUTO_LOGIN ───────────────────────────────────────
+        // When DB_USERNAME=<DBAUTH>, ServiceProvider::showLoginScreen() is called
+        // at artisan startup. Without ARTISAN_AUTO_LOGIN=1, it prompts readline()
+        // interactively — which hangs non-interactive CI or cron runs.
+        // With ARTISAN_AUTO_LOGIN=1, it uses username "artisan" (hardcoded) and
+        // ARTISAN_DEV_PASSWORD for the PostgreSQL connection.
+        $this->checkEnvArtisanLogin($artisanPassword);
+
+        // ── (b) "artisan" PostgreSQL role ─────────────────────────────────────
+        $createRole  = (bool) $this->option('artisan-role');
+        $attrs        = DBManager::dbUserAttributes('artisan');
+        $roleExists   = ($attrs !== false);
+
+        if (!$roleExists && !$createRole && !$this->checkOnly) {
+            // Not asked to create; skip silently.
+            return;
         }
 
-        $attrs = DBManager::dbUserAttributes('artisan');
-
-        if ($attrs === false) {
+        if (!$roleExists) {
             if ($this->checkOnly) {
                 $this->error('  [✗] PostgreSQL role "artisan" does not exist.');
                 $this->line('      Create with: CREATE ROLE artisan WITH LOGIN PASSWORD \'<pwd>\';');
-                $this->line('      And grant database access.');
+                $this->line('      Then grant database access. Re-run with --artisan-role to automate.');
                 $this->issues++;
                 return;
             }
 
-            if (!$password) {
+            if (!$createRole) return;
+
+            if (!$artisanPassword) {
                 $this->error('  [✗] Role "artisan" missing and no password supplied.');
                 $this->line('      Use --artisan-password=<pwd> or --password=<pwd>.');
                 $this->issues++;
@@ -429,16 +441,113 @@ class SetupAccess extends Command
             // Full grants prevent errors from Winter's startup DB test
             // (select 1 from winter_translate_messages limit 1).
             $this->line('  Creating role "artisan" with LOGIN and full grants ...');
-            DBManager::createDBUser('artisan', $password, false, false, ['all' => true]);
+            DBManager::createDBUser('artisan', $artisanPassword, false, false, ['all' => true]);
             $this->info('  [✓] Role "artisan" created.');
-        } else {
-            $this->info('  [✓] Role "artisan" exists.');
-            $this->checkDatabaseGrant('artisan');
+            return;
+        }
 
-            if (!$this->checkOnly && $password) {
-                DBManager::updateDBPassword($password, 'artisan');
-                $this->info('  [✓] Artisan role password updated.');
+        $this->info('  [✓] Role "artisan" exists.');
+
+        // ── Security: artisan must NOT have SUPERUSER ─────────────────────────
+        // SUPERUSER bypasses all PostgreSQL row-level security and access controls.
+        // The artisan role is used for non-interactive server startup, not
+        // privileged administration. If a production DBA created the artisan role
+        // as a superuser, this must be corrected.
+        if ($attrs['SUPERUSER']) {
+            $this->warn('  [!] "artisan" role has SUPERUSER — this is a security risk.');
+            $this->line('      The artisan role only needs database access, not SUPERUSER.');
+            $this->line('      Fix: ALTER ROLE artisan WITH NOSUPERUSER;');
+
+            if ($this->checkOnly) {
+                $this->issues++;
+            } elseif ($this->autoFix || $this->confirm('    Remove SUPERUSER from "artisan" role?')) {
+                DBManager::clearSUPERUSER('artisan');
+                $this->info('  [✓] NOSUPERUSER applied to "artisan" role.');
             }
+        } else {
+            $this->info('  [✓] "artisan" role is NOT SUPERUSER — correct.');
+        }
+
+        $this->checkDatabaseGrant('artisan');
+
+        if (!$this->checkOnly && $artisanPassword) {
+            DBManager::updateDBPassword($artisanPassword, 'artisan');
+            $this->info('  [✓] Artisan role password updated.');
+        }
+    }
+
+    /**
+     * Check or fix ARTISAN_AUTO_LOGIN and ARTISAN_DEV_PASSWORD in .env.
+     *
+     * Reads and writes the application .env file directly.
+     * Requires --yes to auto-write, or will prompt for confirmation.
+     */
+    private function checkEnvArtisanLogin(?string $artisanPassword): void
+    {
+        $autoLogin   = env('ARTISAN_AUTO_LOGIN');
+        $devPassword = env('ARTISAN_DEV_PASSWORD', '');
+
+        $loginOk    = ($autoLogin == '1');
+        $passwordOk = !empty($devPassword);
+
+        if ($loginOk && $passwordOk) {
+            $this->info('  [✓] .env: ARTISAN_AUTO_LOGIN=1 and ARTISAN_DEV_PASSWORD are set.');
+            return;
+        }
+
+        if (!$loginOk)    $this->warn('  [!] .env: ARTISAN_AUTO_LOGIN is not set to 1.');
+        if (!$passwordOk) $this->warn('  [!] .env: ARTISAN_DEV_PASSWORD is not set.');
+
+        if ($this->checkOnly) {
+            $this->line('      Add to .env: ARTISAN_AUTO_LOGIN=1 and ARTISAN_DEV_PASSWORD=<artisan-password>');
+            $this->issues++;
+            return;
+        }
+
+        // Ask for confirmation before modifying .env (unless --yes was passed).
+        if (!$this->autoFix && !$this->confirm('    Update .env with ARTISAN_AUTO_LOGIN / ARTISAN_DEV_PASSWORD?')) {
+            $this->issues++;
+            return;
+        }
+
+        $envPath = app()->environmentFilePath();
+        $content = file_get_contents($envPath);
+        $changed = false;
+
+        // Set ARTISAN_AUTO_LOGIN=1.
+        if (!$loginOk) {
+            if (preg_match('/^ARTISAN_AUTO_LOGIN=/m', $content)) {
+                $content = preg_replace('/^ARTISAN_AUTO_LOGIN=.*/m', 'ARTISAN_AUTO_LOGIN=1', $content);
+            } else {
+                $content .= "\nARTISAN_AUTO_LOGIN=1\n";
+            }
+            $this->info('  [✓] .env: ARTISAN_AUTO_LOGIN=1 set.');
+            $changed = true;
+        }
+
+        // Set ARTISAN_DEV_PASSWORD (only if a password was supplied).
+        if (!$passwordOk) {
+            if ($artisanPassword) {
+                if (preg_match('/^ARTISAN_DEV_PASSWORD=/m', $content)) {
+                    $content = preg_replace(
+                        '/^ARTISAN_DEV_PASSWORD=.*/m',
+                        "ARTISAN_DEV_PASSWORD=$artisanPassword",
+                        $content
+                    );
+                } else {
+                    $content .= "ARTISAN_DEV_PASSWORD=$artisanPassword\n";
+                }
+                $this->info('  [✓] .env: ARTISAN_DEV_PASSWORD set.');
+                $changed = true;
+            } else {
+                $this->warn('  [!] .env: ARTISAN_DEV_PASSWORD not set — no --artisan-password supplied.');
+                $this->line('      Re-run with --artisan-password=<password> to set it automatically.');
+                $this->issues++;
+            }
+        }
+
+        if ($changed) {
+            file_put_contents($envPath, $content);
         }
     }
 

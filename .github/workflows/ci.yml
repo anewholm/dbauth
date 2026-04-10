@@ -229,12 +229,16 @@ jobs:
 
       - name: Phase B — bad credentials show error (not 500)
         run: |
-          BODY=$(curl -s -L http://localhost:8000/backend/backend/auth/signin)
+          # GET the login page first, saving the session cookie.
+          # The CSRF token is session-bound: the session that generated it must be
+          # the same one that receives the POST, otherwise CSRF validation fails.
+          BODY=$(curl -s -L -c /tmp/cookies_b_bad.txt -b /tmp/cookies_b_bad.txt \
+            http://localhost:8000/backend/backend/auth/signin)
           TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
           test -n "$TOKEN"
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -c /tmp/cookies_b_bad.txt -b /tmp/cookies_b_bad.txt \
-            -H "X-CSRF-TOKEN: $TOKEN" \
+            --data-urlencode "_token=$TOKEN" \
             -d "postback=1&login=nobody&password=wrongpassword" \
             http://localhost:8000/backend/backend/auth/signin)
           echo "Phase B bad login status: $STATUS"
@@ -243,10 +247,18 @@ jobs:
 
       - name: Phase B — correct credentials authenticate via PostgreSQL role
         run: |
-          # CSRF is disabled by DBAuth in Phase B, so no _token needed.
-          # Do NOT follow redirect (-L): 302 is sufficient proof of success.
+          # GET the login page first to establish a session and obtain the CSRF token.
+          # Form::open() and the csrf-token meta tag both carry the session token.
+          # DBAuth respects ENABLE_CSRF=true, so the token must be sent in the POST.
+          # Do NOT follow redirect (-L) on the POST: 302 is sufficient proof of success.
+          BODY=$(curl -s -L -c /tmp/cookies_b.txt -b /tmp/cookies_b.txt \
+            http://localhost:8000/backend/backend/auth/signin)
+          TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
+          echo "Phase B CSRF token: ${TOKEN:0:10}..."
+          test -n "$TOKEN"
           LOGINRESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
             -c /tmp/cookies_b.txt -b /tmp/cookies_b.txt \
+            --data-urlencode "_token=$TOKEN" \
             --data-urlencode "login=admin" \
             --data-urlencode "password=testpassword123" \
             -d "postback=1" \

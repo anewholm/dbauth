@@ -72,9 +72,16 @@ class ServiceProvider extends ModuleServiceProvider
         });
 
         if ($this->isEnabled()) {
-            // TODO: SECURITY: Disabled this because I cannot get XSRF to work
-            // on the login form
-            Config::set('cms.enableCsrfProtection', false);
+            // Disable CSRF protection unless ENABLE_CSRF=true is explicitly set in .env.
+            // DBAuth's custom login page (resources/login.php) is served via include()+exit()
+            // rather than the normal WinterCMS request cycle. The page always outputs a
+            // csrf-token meta tag and Form::open() always adds a hidden _token field, so
+            // the token is present in the form regardless. When ENABLE_CSRF=true the token
+            // is verified server-side; when not set it is ignored (the comment form is still
+            // populated — this just skips the verification step).
+            if (!env('ENABLE_CSRF')) {
+                Config::set('cms.enableCsrfProtection', false);
+            }
 
             // ---------------------------------------  Login control
             Event::listen('backend.user.login', function($user) {
