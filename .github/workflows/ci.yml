@@ -121,18 +121,14 @@ jobs:
       # DBAuth's register() unconditionally intercepts all pgsql connections,
       # even when DB_USERNAME != <DBAUTH>. On a login POST it substitutes the
       # form credentials, so the 'admin' role must exist before Phase A tests.
+      #
+      # dbauth:setup-access handles all role creation, grants, cross-grants, and
+      # the auto_create_db_user setting in one place. It also creates the "artisan"
+      # role used by ARTISAN_AUTO_LOGIN when DB_USERNAME=<DBAUTH> (Phase B).
 
       - name: Pre-create PostgreSQL roles for DBAuth
-        run: |
-          PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms_test << 'SQLEOF'
-          CREATE ROLE admin WITH LOGIN PASSWORD 'testpassword123' CREATEROLE;
-          GRANT ALL ON DATABASE wintercms_test TO admin;
-          GRANT ALL ON SCHEMA public TO admin;
-          GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO admin;
-          GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO admin;
-          CREATE ROLE "token_wintercms_test_1" WITH LOGIN PASSWORD 'inittoken';
-          GRANT "token_wintercms_test_1" TO admin WITH ADMIN OPTION;
-          SQLEOF
+        working-directory: wintercms
+        run: php artisan dbauth:setup-access --login=admin --password=testpassword123 --enable-auto-create --artisan-role --artisan-password=testpassword
 
       # ── Phase A: DB_USERNAME=createsystem (standard WinterCMS login page) ─────
       # DBAuth is installed but the <DBAUTH> sentinel is not set. The standard
@@ -208,6 +204,10 @@ jobs:
         run: |
           sed -i 's/DB_USERNAME=createsystem/DB_USERNAME=<DBAUTH>/' .env
           sed -i 's/DB_PASSWORD=testpassword/DB_PASSWORD=<DBAUTH>/' .env
+          # ARTISAN_AUTO_LOGIN=1 makes ServiceProvider::showLoginScreen() use the
+          # "artisan" PostgreSQL role (created above) instead of prompting stdin.
+          # Without this, "php artisan serve" hangs waiting for console input.
+          printf '\nARTISAN_AUTO_LOGIN=1\nARTISAN_DEV_PASSWORD=testpassword\n' >> .env
 
       - name: Start PHP server (Phase B)
         working-directory: wintercms
