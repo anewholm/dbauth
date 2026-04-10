@@ -167,20 +167,27 @@ jobs:
 
       - name: Phase A — correct credentials login succeeds (302 redirect)
         run: |
-          # Extract CSRF token from meta tag
-          BODY=$(curl -s -L -c /tmp/cookies_a.txt http://localhost:8000/backend/backend/auth/signin)
+          # Fetch login page, reusing existing session cookie so the CSRF token
+          # is bound to the same session we will POST to.
+          BODY=$(curl -s -L -c /tmp/cookies_a.txt -b /tmp/cookies_a.txt http://localhost:8000/backend/backend/auth/signin)
           TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
           echo "Extracted CSRF token: ${TOKEN:0:10}..."
           test -n "$TOKEN"
 
-          # POST login — do NOT follow redirect (-L): the token_% role password is
-          # not synced yet in Phase A, so the backend dashboard would fail to load.
-          # A 302 response is sufficient proof that WinterCMS accepted the credentials.
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          # POST login — capture full response body so failures are diagnosable.
+          # Use --data-urlencode for the token to survive any base64 special chars.
+          # Do NOT follow redirect (-L): a 302 is sufficient proof of success.
+          LOGINRESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
             -c /tmp/cookies_a.txt -b /tmp/cookies_a.txt \
-            -d "_token=$TOKEN&postback=1&login=admin&password=testpassword123" \
+            --data-urlencode "_token=$TOKEN" \
+            -d "postback=1&login=admin&password=testpassword123" \
             http://localhost:8000/backend/backend/auth/signin)
+          STATUS=$(echo "$LOGINRESPONSE" | grep "HTTP_STATUS:" | sed 's/.*HTTP_STATUS://')
           echo "Phase A login status: $STATUS"
+          if [ "$STATUS" != "302" ]; then
+            echo "=== Login response body (first 60 lines) ==="
+            echo "$LOGINRESPONSE" | grep -v "HTTP_STATUS:" | head -60
+          fi
           test "$STATUS" = "302"
           echo "Phase A login: OK"
 
