@@ -97,30 +97,25 @@ jobs:
         working-directory: wintercms
         run: php artisan winter:up
 
-      - name: Create WinterCMS admin user
+      - name: Set admin user password
         working-directory: wintercms
         run: |
-          cat > create_admin.php << 'PHPEOF'
+          cat > set_admin_pwd.php << 'PHPEOF'
           <?php
           define('STDIN', fopen('php://stdin', 'r'));
           require __DIR__ . '/bootstrap/autoload.php';
           $app = require_once __DIR__ . '/bootstrap/app.php';
           $kernel = $app->make('Illuminate\Contracts\Console\Kernel');
           $kernel->bootstrap();
-          $user = Backend\Models\User::create([
-              'first_name'           => 'Test',
-              'last_name'            => 'Admin',
-              'login'                => 'admin',
-              'email'                => 'admin@test.com',
-              'password'             => 'testpassword123',
-              'password_confirmation'=> 'testpassword123',
-              'is_superuser'         => 1,
-              'is_activated'         => 1,
-          ]);
-          echo "Admin user created with ID: " . $user->id . "\n";
+          // The backend seeder creates admin with an empty password; update it.
+          $user = Backend\Models\User::where('login', 'admin')->firstOrFail();
+          $user->password = 'testpassword123';
+          $user->password_confirmation = 'testpassword123';
+          $user->forceSave();
+          echo "Admin password set, user ID: " . $user->id . "\n";
           PHPEOF
-          php create_admin.php
-          rm create_admin.php
+          php set_admin_pwd.php
+          rm set_admin_pwd.php
 
       # ── Pre-create PostgreSQL roles (required by both phases) ─────────────────
       # DBAuth's register() unconditionally intercepts all pgsql connections,
@@ -248,16 +243,21 @@ jobs:
 
       - name: Phase B — correct credentials authenticate via PostgreSQL role
         run: |
-          BODY=$(curl -s -L -c /tmp/cookies_b.txt http://localhost:8000/backend/backend/auth/signin)
-          TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
-          test -n "$TOKEN"
-          RESPONSE=$(curl -s -L \
+          # CSRF is disabled by DBAuth in Phase B, so no _token needed.
+          # Do NOT follow redirect (-L): 302 is sufficient proof of success.
+          LOGINRESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
             -c /tmp/cookies_b.txt -b /tmp/cookies_b.txt \
-            -H "X-CSRF-TOKEN: $TOKEN" \
-            -d "postback=1&login=admin&password=testpassword123" \
+            --data-urlencode "login=admin" \
+            --data-urlencode "password=testpassword123" \
+            -d "postback=1" \
             http://localhost:8000/backend/backend/auth/signin)
-          echo "$RESPONSE" | grep -qi "Winter\|Backend\|Dashboard\|wn-icon" \
-            || (echo "Phase B login failed — response:"; echo "$RESPONSE" | head -30; exit 1)
+          STATUS=$(echo "$LOGINRESPONSE" | grep "HTTP_STATUS:" | sed 's/.*HTTP_STATUS://')
+          echo "Phase B login status: $STATUS"
+          if [ "$STATUS" != "302" ]; then
+            echo "=== Phase B login response (first 60 lines) ==="
+            echo "$LOGINRESPONSE" | grep -v "HTTP_STATUS:" | head -60
+          fi
+          test "$STATUS" = "302"
           echo "Phase B login with PostgreSQL role: OK"
 
       - name: Dump PHP server logs on failure
