@@ -497,6 +497,21 @@ class SetupAccess extends Command
             $this->line("  Creating role \"$login\" with LOGIN CREATEROLE ...");
             DBManager::createDBUser($login, $password, false, true, ['all' => true]);
             $this->info("  [✓] Role \"$login\" created.");
+
+            // Sync backend_users.password so WinterCMS auth matches the new PG role.
+            // WinterCMS seeder creates admin with empty password; forceSave() bypasses
+            // validation that would reject an empty→new password change.
+            try {
+                $user = BackendUser::where('login', $login)->first();
+                if ($user) {
+                    $user->password              = $password;
+                    $user->password_confirmation = $password;
+                    $user->forceSave();
+                    $this->info("  [✓] backend_users password synced for \"$login\".");
+                }
+            } catch (Exception $ex) {
+                $this->warn("  [!] Could not sync backend_users password: " . $ex->getMessage());
+            }
             return;
         }
 
