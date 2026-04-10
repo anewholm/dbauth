@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\App;
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Cookie\CookieValuePrefix;
 use Illuminate\Session\SessionManager;
 use DBAuth\PostGreSQLManager as DBManager;
 use DBAuth\Models\Settings;
@@ -388,15 +389,19 @@ class ServiceProvider extends ModuleServiceProvider
                 // Set-Cookie header that StartSession adds to the Response object is
                 // never sent. Set the session cookie via PHP directly so the browser
                 // sends it back on the login POST (needed for CSRF validation).
-                // IMPORTANT: Laravel's EncryptCookies middleware encrypts all
-                // response cookies and decrypts request cookies. If we set the
-                // session cookie with the raw session ID, EncryptCookies cannot
-                // decrypt it on the POST → session not found → new empty session
-                // → no CSRF token → 403. Use encrypt($id, false) to match what
-                // EncryptCookies itself does (false = don't additionally serialize).
+                //
+                // EncryptCookies (Laravel 8.5+) prepends CookieValuePrefix::create()
+                // to the plaintext before encrypting response cookies, and validates
+                // that prefix on inbound cookies via CookieValuePrefix::validate().
+                // If the prefix is absent, validate() returns null and StartSession
+                // creates a new session (no CSRF token) → 403. We must include the
+                // prefix here exactly as EncryptCookies::encrypt() does (line 180):
+                //   $encrypter->encrypt(CookieValuePrefix::create($name, $key).$value, false)
+                $cookieName = Config::get('session.cookie', 'laravel_session');
+                $prefix      = CookieValuePrefix::create($cookieName, app('encrypter')->getKey());
                 setcookie(
-                    Config::get('session.cookie', 'laravel_session'),
-                    app('encrypter')->encrypt(Session::getId(), false),
+                    $cookieName,
+                    app('encrypter')->encrypt($prefix . Session::getId(), false),
                     [
                         'expires'  => 0,
                         'path'     => Config::get('session.path', '/'),
