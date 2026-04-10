@@ -388,9 +388,15 @@ class ServiceProvider extends ModuleServiceProvider
                 // Set-Cookie header that StartSession adds to the Response object is
                 // never sent. Set the session cookie via PHP directly so the browser
                 // sends it back on the login POST (needed for CSRF validation).
+                // IMPORTANT: Laravel's EncryptCookies middleware encrypts all
+                // response cookies and decrypts request cookies. If we set the
+                // session cookie with the raw session ID, EncryptCookies cannot
+                // decrypt it on the POST → session not found → new empty session
+                // → no CSRF token → 403. Use encrypt($id, false) to match what
+                // EncryptCookies itself does (false = don't additionally serialize).
                 setcookie(
                     Config::get('session.cookie', 'laravel_session'),
-                    Session::getId(),
+                    app('encrypter')->encrypt(Session::getId(), false),
                     [
                         'expires'  => 0,
                         'path'     => Config::get('session.path', '/'),
