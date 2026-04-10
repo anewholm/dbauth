@@ -375,19 +375,31 @@ class ServiceProvider extends ModuleServiceProvider
         } 
         
         else { // HTTP call
-            // TODO: SECURITY: XSRF protection is disabled above
-            Session::start(); // => loadSession() && regenerateToken();
-            //$cookie = $this->makeXsrfCookie();
-            //setcookie($cookie->getName(), $cookie->getValue());
-            $xsrf = Session::token();
-            //$sessionId = Session::getId();
-            // This is likely an old backend persist token
-            // causing failed token_% DB connect
-            if ($ex) 
+            Session::start();
+            // This is likely an old backend persist token causing failed token_% DB connect.
+            if ($ex)
                 BackendAuth::logout();
+            // Get (or generate) the CSRF token after any logout/session changes.
+            $xsrf = csrf_token();
             Session::save();
 
-            if ($this->app->runningInBackend()) {            
+            if ($this->app->runningInBackend()) {
+                // exit(0) below bypasses Laravel's normal response dispatch, so the
+                // Set-Cookie header that StartSession adds to the Response object is
+                // never sent. Set the session cookie via PHP directly so the browser
+                // sends it back on the login POST (needed for CSRF validation).
+                setcookie(
+                    Config::get('session.cookie', 'laravel_session'),
+                    Session::getId(),
+                    [
+                        'expires'  => 0,
+                        'path'     => Config::get('session.path', '/'),
+                        'domain'   => Config::get('session.domain', '') ?: '',
+                        'secure'   => (bool) Config::get('session.secure', false),
+                        'httponly' => (bool) Config::get('session.http_only', true),
+                        'samesite' => Config::get('session.same_site', 'lax'),
+                    ]
+                );
                 // Show the fixed HTML login screen and exit
                 // to avoid any db access attempts from other plugins
                 include $this->loginScreenPath();
