@@ -87,21 +87,17 @@ class ServiceProvider extends ModuleServiceProvider
             // ---------------------------------------  Login control
             Event::listen('backend.user.login', function($user) {
                 // Login to database has been successful with Normal user
-                // Auth\Manager::setPersistCodeInSession() has already run and stored
-                // [user_id, raw_persist_code] in Session::get('admin_auth') before
-                // this event fires (see Auth\Manager::login() → afterLogin()).
-                // We read it from there — do NOT call $user->getPersistCode() again,
-                // as that generates a new code and overwrites the session value,
-                // causing a mismatch between the session and the PG token role password.
+                // A new backend_users.persist_code has been generated for future connections using the token_% user
+                // The token_% password needs to be updated for this new persist code
+                // It is necessary that the normal login has GRANT OPTION and CREATEROLE on the token_%
+                // in order to make this change
+                //   GRANT agri TO token_27 WITH ADMIN OPTION => agri can change token_27
                 $success = NULL;
                 try {
                     if (Settings::get('auto_create_db_user') == '1') {
                         $tokenLoginName = self::tokenLoginName($user);
-                        $authArray      = self::getSessionAuthCookieArray();
-                        if ($authArray) {
-                            [, $persistCode] = $authArray;
-                            $success = DBManager::updateDBPassword($persistCode, $tokenLoginName);
-                        }
+                        $persistCode    = $user->getPersistCode();
+                        $success = DBManager::updateDBPassword($persistCode, $tokenLoginName);
                     }
                 } catch (QueryException $ex) {
                     // This will show the exception message
@@ -303,6 +299,16 @@ class ServiceProvider extends ModuleServiceProvider
         // Return value of FALSE indicates no changes to config
         // so username may still == <DBAUTH>
         // causing connection failure
+        //
+        // In Phase A (real DB credentials in .env, username != '<DBAUTH>'),
+        // do nothing — WinterCMS handles sessions normally with the real user.
+        // The token-role swap only applies in Phase B (username == '<DBAUTH>').
+        // Without this guard, morphConfig would read admin_auth from the session
+        // and try to connect as token_<db>_<id>, but in Phase A the backend.user.login
+        // listener (which syncs the token role's PG password) is not registered,
+        // so the token role would have a stale or non-existent password.
+        if ($config['username'] != '<DBAUTH>') return $config;
+
         if ($this->isLoggingIn()) {
             // Allow normal logging in process
             $input = post();
