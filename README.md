@@ -3,7 +3,7 @@
 ![Human made content](human-made-content.png "Human made content")
 [![CI](https://github.com/anewholm/dbauth/actions/workflows/ci.yml/badge.svg)](https://github.com/anewholm/dbauth/actions/workflows/ci.yml)
 
-> **Note:** CI contains a full curl-based test-suite. CodeQL security scanning is unfortunately not available for PHP on GitHub's free tier.
+> **Note:** CI contains a full curl-based test-suite. Semgrep Security Scan used as CodeQL security scanning is unfortunately not available for PHP on GitHub's free tier.
 
 DBAuth is a WinterCMS module that forces login to the associated backend PostgreSQL database server using the front-end user's login credentials. No database `DB_USERNAME` or `DB_PASSWORD` is stored in `.env` or `config/database.php`. Each authenticated session is backed by a dedicated, short-lived PostgreSQL role, enabling [Row Level Security (RLS)](https://www.postgresql.org/docs/current/ddl-rowsecurity.html) policies to scope data access per user at the database level.
 
