@@ -87,12 +87,10 @@ jobs:
             --no-dbauth \
             --apply-l10-fix \
             --no-apache \
+            --ci \
+            --no-start-server \
             --install-dir=${{ github.workspace }} \
             wintercms
-
-      - name: Clear WinterCMS bootstrap cache
-        working-directory: ${{ github.workspace }}/wintercms
-        run: rm -f bootstrap/cache/packages.php bootstrap/cache/services.php
 
       # ── Set up DBAuth roles and sync admin password ───────────────────────────
       # dbauth:setup-access creates the named PG role (admin) and token role,
