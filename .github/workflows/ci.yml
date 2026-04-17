@@ -27,7 +27,7 @@ jobs:
       - name: Check PHP syntax
         run: find . -name "*.php" -not -path "./vendor/*" -exec php -l {} \;
 
-  # ── Functional tests: full session-based curl checks against a live server ───
+  # ── Functional tests: session-based curl checks against a live server ────────
 
   functional:
     name: Functional (WinterCMS 1.2.0)
@@ -37,7 +37,7 @@ jobs:
       postgres:
         image: postgres:15
         env:
-          POSTGRES_DB: wintercms_test
+          POSTGRES_DB: wintercms
           POSTGRES_USER: createsystem
           POSTGRES_PASSWORD: testpassword
         ports:
@@ -60,55 +60,51 @@ jobs:
           extensions: pdo_pgsql, mbstring, xml, gd, curl, zip
           coverage: none
 
+      - name: Check out setup scripts
+        uses: actions/checkout@v4
+        with:
+          repository: anewholm/scripts
+          path: scripts-repo
+
       - name: Cache Composer packages
         uses: actions/cache@v4
         with:
           path: ~/.composer/cache
-          key: composer-wintercms-1.2.0-${{ hashFiles('**/composer.lock') }}
-          restore-keys: composer-wintercms-1.2.0-
+          key: composer-wintercms-1.2.0
+          restore-keys: composer-wintercms-
 
-      - name: Install WinterCMS 1.2.0
-        run: composer create-project wintercms/winter:1.2.0 wintercms --prefer-dist --no-interaction -q
-
-      - name: Check out Acorn module
-        uses: actions/checkout@v4
-        with:
-          repository: anewholm/acorn
-          path: wintercms/modules/acorn
-
-      - name: Place DBAuth module
-        run: cp -r dbauth-src wintercms/modules/dbauth
-
-      - name: Configure WinterCMS .env (Phase A — real DB credentials)
-        working-directory: wintercms
+      - name: Install WinterCMS + Acorn + DBAuth
         run: |
-          printf 'APP_NAME="Winter CMS"\nAPP_KEY=\nAPP_DEBUG=true\nAPP_URL=http://localhost:8000\nDB_CONNECTION=pgsql\nDB_HOST=127.0.0.1\nDB_PORT=5432\nDB_DATABASE=wintercms_test\nDB_USERNAME=createsystem\nDB_PASSWORD=testpassword\nCACHE_DRIVER=file\nSESSION_DRIVER=file\nQUEUE_CONNECTION=sync\nROUTES_CACHE=false\nASSET_CACHE=false\nLINK_POLICY=detect\nENABLE_CSRF=true\n' > .env
-          php artisan key:generate --quiet
+          bash scripts-repo/acorn-setup-new-winter \
+            --winter-version=1.2.0 \
+            --admin-password=testpassword123 \
+            --db-username=createsystem \
+            --db-password=testpassword \
+            --db-host=127.0.0.1 \
+            --acorn-github=anewholm/acorn \
+            --dbauth-src=${{ github.workspace }}/dbauth-src \
+            --no-interactive \
+            --no-dbauth \
+            --apply-l10-fix \
+            --no-apache \
+            --install-dir=${{ github.workspace }} \
+            wintercms
 
-      - name: Enable DBAuth module
-        working-directory: wintercms
-        run: sed -i "s/'Cms'/'Cms', 'Acorn', 'DBAuth'/" config/cms.php
-
-      - name: Fix lists() removed in WinterCMS dev
-        working-directory: wintercms
-        run: find modules/system/classes -name "VersionManager.php" -exec sed -i "s/->lists(/->pluck(/g" {} \;
-
-      - name: Run migrations
-        working-directory: wintercms
-        run: php artisan winter:up
+      - name: Clear WinterCMS bootstrap cache
+        working-directory: ${{ github.workspace }}/wintercms
+        run: rm -f bootstrap/cache/packages.php bootstrap/cache/services.php
 
       # ── Set up DBAuth roles and sync admin password ───────────────────────────
       # dbauth:setup-access creates the named PG role (admin) and token role,
       # sets the cross-grant, enables auto_create_db_user, and syncs the password
-      # to backend_users — replacing the old separate "Set admin user password"
-      # inline PHP script. Also creates the "artisan" role for ARTISAN_AUTO_LOGIN.
+      # to backend_users. Also creates the "artisan" role for ARTISAN_AUTO_LOGIN.
       #
       # DBAuth's register() unconditionally intercepts all pgsql connections,
       # even when DB_USERNAME != <DBAUTH>. On a login POST it substitutes the
       # form credentials, so the 'admin' role must exist before Phase A tests.
 
       - name: Set up DBAuth roles and admin credentials
-        working-directory: wintercms
+        working-directory: ${{ github.workspace }}/wintercms
         run: php artisan dbauth:setup-access --login=admin --password=testpassword123 --enable-auto-create --artisan-role --artisan-password=testpassword
 
       # ── Phase A: DB_USERNAME=createsystem (standard WinterCMS login page) ─────
@@ -117,7 +113,9 @@ jobs:
       # on POST, so login succeeds via the pre-created 'admin' PostgreSQL role.
 
       - name: Start PHP server (Phase A)
-        working-directory: wintercms
+        working-directory: ${{ github.workspace }}/wintercms
+        env:
+          PHP_CLI_SERVER_WORKERS: 1
         run: nohup php artisan serve --port=8000 > /tmp/php-server.log 2>&1 &
 
       - name: Wait for PHP server
@@ -181,7 +179,7 @@ jobs:
       # ── Phase B: DB_USERNAME=<DBAUTH> (DBAuth active — custom login page) ──────
 
       - name: Switch .env to DBAuth sentinel (Phase B)
-        working-directory: wintercms
+        working-directory: ${{ github.workspace }}/wintercms
         run: |
           sed -i 's/DB_USERNAME=createsystem/DB_USERNAME=<DBAUTH>/' .env
           sed -i 's/DB_PASSWORD=testpassword/DB_PASSWORD=<DBAUTH>/' .env
@@ -191,7 +189,9 @@ jobs:
           printf '\nARTISAN_AUTO_LOGIN=1\nARTISAN_DEV_PASSWORD=testpassword\n' >> .env
 
       - name: Start PHP server (Phase B)
-        working-directory: wintercms
+        working-directory: ${{ github.workspace }}/wintercms
+        env:
+          PHP_CLI_SERVER_WORKERS: 1
         run: nohup php artisan serve --port=8000 > /tmp/php-server-b.log 2>&1 &
 
       - name: Wait for PHP server
@@ -229,11 +229,6 @@ jobs:
       - name: Phase B — correct credentials authenticate via PostgreSQL role
         run: |
           # GET the login page first to establish a session and obtain the CSRF token.
-          # DBAuth serves its own login page via include()+exit(0), bypassing the normal
-          # Laravel response dispatch. This means StartSession's Set-Cookie header (added
-          # to the Response object) is never sent; DBAuth calls PHP setcookie() directly
-          # to ensure the browser gets the session cookie before the POST.
-          # Show verbose headers on the GET so CI logs confirm the Set-Cookie is present.
           echo "=== Phase B GET headers ==="
           curl -s -D - -L -c /tmp/cookies_b.txt -b /tmp/cookies_b.txt \
             http://localhost:8000/backend/backend/auth/signin -o /tmp/phase_b_body.html
@@ -243,7 +238,6 @@ jobs:
           TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
           echo "Phase B CSRF token: ${TOKEN:0:10}..."
           test -n "$TOKEN"
-          # Do NOT follow redirect (-L) on the POST: 302 is sufficient proof of success.
           LOGINRESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
             -c /tmp/cookies_b.txt -b /tmp/cookies_b.txt \
             --data-urlencode "_token=$TOKEN" \
