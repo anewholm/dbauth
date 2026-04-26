@@ -351,7 +351,7 @@ jobs:
           ATTR=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
             -t -c "SELECT rolcreaterole::text FROM pg_roles WHERE rolname = 'admin';" | tr -d ' ')
           echo "admin rolcreaterole: $ATTR"
-          test "$ATTR" = "t"
+          test "$ATTR" = "true"
 
       - name: Phase B — admin token PostgreSQL role exists
         run: |
