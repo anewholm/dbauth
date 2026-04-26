@@ -240,6 +240,33 @@ jobs:
           echo "testuser2 token role (token_wintercms_$ID): $COUNT"
           test "$COUNT" = "1"
 
+      - name: Phase A — create noroleuser without PostgreSQL roles (for Phase B graceful-error test)
+        working-directory: ${{ github.workspace }}/wintercms
+        run: |
+          php -r '
+          define("LARAVEL_START", microtime(true));
+          require "vendor/autoload.php";
+          $app = require "bootstrap/app.php";
+          $app->make("Illuminate\Contracts\Console\Kernel")->bootstrap();
+          $u = new Backend\Models\User;
+          $u->login = "noroleuser";
+          $u->email = "norole@example.com";
+          $u->password = "testpassword123";
+          $u->password_confirmation = "testpassword123";
+          $u->first_name = "No";
+          $u->last_name = "Role";
+          $u->is_activated = true;
+          $u->forceSave();
+          echo "noroleuser created ID=" . $u->id . "\n";
+          '
+          NOROLE_ID=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT id FROM backend_users WHERE login = 'noroleuser';" | tr -d ' ')
+          PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -c "DROP ROLE IF EXISTS noroleuser;"
+          PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -c "DROP ROLE IF EXISTS token_wintercms_$NOROLE_ID;"
+          echo "noroleuser PG roles dropped — Phase B will test graceful error on login"
+
       - name: Stop PHP server
         run: pkill -f "artisan" || true
 
@@ -416,31 +443,9 @@ jobs:
           test "$STATUS" = "200"
 
       - name: Phase B — backend user without PostgreSQL role handled gracefully (not 500)
-        working-directory: ${{ github.workspace }}/wintercms
         run: |
-          php -r '
-          define("LARAVEL_START", microtime(true));
-          require "vendor/autoload.php";
-          $app = require "bootstrap/app.php";
-          $app->make("Illuminate\Contracts\Console\Kernel")->bootstrap();
-          $u = new Backend\Models\User;
-          $u->login = "noroleuser";
-          $u->email = "norole@example.com";
-          $u->password = "testpassword123";
-          $u->password_confirmation = "testpassword123";
-          $u->first_name = "No";
-          $u->last_name = "Role";
-          $u->is_activated = true;
-          $u->forceSave();
-          echo "noroleuser created ID=" . $u->id . "\n";
-          '
-          NOROLE_ID=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
-            -t -c "SELECT id FROM backend_users WHERE login = 'noroleuser';" | tr -d ' ')
-          PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
-            -c "DROP ROLE IF EXISTS noroleuser;"
-          PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
-            -c "DROP ROLE IF EXISTS token_wintercms_$NOROLE_ID;"
-          echo "PG roles dropped — simulating missing-role scenario"
+          # noroleuser was created in Phase A with its PG roles immediately dropped.
+          # DBAuth must show an error page, not 500.
           BODY=$(curl -s -L -c /tmp/cookies_norole.txt -b /tmp/cookies_norole.txt \
             http://localhost:8000/backend/backend/auth/signin)
           TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
