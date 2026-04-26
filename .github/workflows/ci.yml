@@ -171,6 +171,75 @@ jobs:
           test "$STATUS" != "500"
           test "$STATUS" != "000"
 
+      - name: Phase A — empty credentials return error (not 500)
+        run: |
+          BODY=$(curl -s -L -c /tmp/cookies_empty.txt -b /tmp/cookies_empty.txt http://localhost:8000/backend/backend/auth/signin)
+          TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -c /tmp/cookies_empty.txt -b /tmp/cookies_empty.txt \
+            --data-urlencode "_token=$TOKEN" \
+            -d "postback=1&login=&password=" \
+            http://localhost:8000/backend/backend/auth/signin)
+          echo "Empty credentials status: $STATUS"
+          test "$STATUS" != "500"
+          test "$STATUS" != "000"
+
+      - name: Phase A — SQL injection attempt handled safely (not 500)
+        run: |
+          BODY=$(curl -s -L -c /tmp/cookies_sqli.txt -b /tmp/cookies_sqli.txt http://localhost:8000/backend/backend/auth/signin)
+          TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -c /tmp/cookies_sqli.txt -b /tmp/cookies_sqli.txt \
+            --data-urlencode "_token=$TOKEN" \
+            --data-urlencode "login=' OR '1'='1'--" \
+            --data-urlencode "password=anything" \
+            -d "postback=1" \
+            http://localhost:8000/backend/backend/auth/signin)
+          echo "SQL injection attempt status: $STATUS"
+          test "$STATUS" != "500"
+          test "$STATUS" != "000"
+
+      - name: Phase A — create testuser2 backend user
+        working-directory: ${{ github.workspace }}/wintercms
+        run: |
+          php -r '
+          define("LARAVEL_START", microtime(true));
+          require "vendor/autoload.php";
+          $app = require "bootstrap/app.php";
+          $app->make("Illuminate\Contracts\Console\Kernel")->bootstrap();
+          $u = new Backend\Models\User;
+          $u->login = "testuser2";
+          $u->email = "testuser2@example.com";
+          $u->password = "testpassword123";
+          $u->password_confirmation = "testpassword123";
+          $u->first_name = "Test";
+          $u->last_name = "UserTwo";
+          $u->is_activated = true;
+          $u->forceSave();
+          echo "Created testuser2 ID=" . $u->id . "\n";
+          '
+
+      - name: Phase A — set up testuser2 PostgreSQL roles via dbauth:setup-access
+        working-directory: ${{ github.workspace }}/wintercms
+        run: php artisan dbauth:setup-access --login=testuser2 --password=testpassword123
+
+      - name: Phase A — testuser2 named PostgreSQL role created
+        run: |
+          COUNT=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT count(*) FROM pg_roles WHERE rolname = 'testuser2';" | tr -d ' ')
+          echo "testuser2 named role count: $COUNT"
+          test "$COUNT" = "1"
+
+      - name: Phase A — testuser2 token PostgreSQL role created
+        run: |
+          ID=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT id FROM backend_users WHERE login = 'testuser2';" | tr -d ' ')
+          echo "testuser2 backend user ID: $ID"
+          COUNT=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT count(*) FROM pg_roles WHERE rolname = 'token_wintercms_$ID';" | tr -d ' ')
+          echo "testuser2 token role (token_wintercms_$ID): $COUNT"
+          test "$COUNT" = "1"
+
       - name: Stop PHP server
         run: pkill -f "artisan" || true
 
@@ -251,6 +320,141 @@ jobs:
           fi
           test "$STATUS" = "302"
           echo "Phase B login with PostgreSQL role: OK"
+
+      - name: Phase B — backend dashboard accessible after login
+        run: |
+          STATUS=$(curl -s -o /tmp/dashboard_b.html -w "%{http_code}" \
+            -L -c /tmp/cookies_b.txt -b /tmp/cookies_b.txt \
+            http://localhost:8000/backend)
+          echo "Dashboard status: $STATUS"
+          test "$STATUS" = "200"
+          grep -qi "dashboard\|backend\|Administration\|Users" /tmp/dashboard_b.html
+          echo "Phase B dashboard: OK"
+
+      - name: Phase B — backend users list accessible
+        run: |
+          STATUS=$(curl -s -o /tmp/users_list.html -w "%{http_code}" \
+            -L -c /tmp/cookies_b.txt -b /tmp/cookies_b.txt \
+            http://localhost:8000/backend/backend/users)
+          echo "Users list status: $STATUS"
+          test "$STATUS" = "200"
+
+      - name: Phase B — admin named PostgreSQL role exists
+        run: |
+          COUNT=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT count(*) FROM pg_roles WHERE rolname = 'admin';" | tr -d ' ')
+          echo "admin PG role count: $COUNT"
+          test "$COUNT" = "1"
+
+      - name: Phase B — admin PostgreSQL role has CREATEROLE attribute
+        run: |
+          ATTR=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT rolcreaterole::text FROM pg_roles WHERE rolname = 'admin';" | tr -d ' ')
+          echo "admin rolcreaterole: $ATTR"
+          test "$ATTR" = "t"
+
+      - name: Phase B — admin token PostgreSQL role exists
+        run: |
+          ADMIN_ID=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT id FROM backend_users WHERE login = 'admin';" | tr -d ' ')
+          COUNT=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT count(*) FROM pg_roles WHERE rolname = 'token_wintercms_$ADMIN_ID';" | tr -d ' ')
+          echo "admin token role (token_wintercms_$ADMIN_ID): $COUNT"
+          test "$COUNT" = "1"
+
+      - name: Phase B — testuser2 login via DBAuth
+        run: |
+          BODY=$(curl -s -L -c /tmp/cookies_b2.txt -b /tmp/cookies_b2.txt \
+            http://localhost:8000/backend/backend/auth/signin)
+          TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
+          test -n "$TOKEN"
+          LOGINRESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            -c /tmp/cookies_b2.txt -b /tmp/cookies_b2.txt \
+            --data-urlencode "_token=$TOKEN" \
+            --data-urlencode "login=testuser2" \
+            --data-urlencode "password=testpassword123" \
+            -d "postback=1" \
+            http://localhost:8000/backend/backend/auth/signin)
+          STATUS=$(echo "$LOGINRESPONSE" | grep "HTTP_STATUS:" | sed 's/.*HTTP_STATUS://')
+          echo "testuser2 login status: $STATUS"
+          if [ "$STATUS" != "302" ]; then
+            echo "$LOGINRESPONSE" | grep -v "HTTP_STATUS:" | head -40
+          fi
+          test "$STATUS" = "302"
+          echo "testuser2 DBAuth login: OK"
+
+      - name: Phase B — testuser2 backend accessible after login
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -L -c /tmp/cookies_b2.txt -b /tmp/cookies_b2.txt \
+            http://localhost:8000/backend)
+          echo "testuser2 backend status: $STATUS"
+          test "$STATUS" = "200"
+
+      - name: Phase B — concurrent admin session (independent second browser session)
+        run: |
+          BODY=$(curl -s -L -c /tmp/cookies_b3.txt -b /tmp/cookies_b3.txt \
+            http://localhost:8000/backend/backend/auth/signin)
+          TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
+          test -n "$TOKEN"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -c /tmp/cookies_b3.txt -b /tmp/cookies_b3.txt \
+            --data-urlencode "_token=$TOKEN" \
+            --data-urlencode "login=admin" \
+            --data-urlencode "password=testpassword123" \
+            -d "postback=1" \
+            http://localhost:8000/backend/backend/auth/signin)
+          echo "Concurrent admin session login: $STATUS"
+          test "$STATUS" = "302"
+          echo "Both admin and testuser2 sessions operational concurrently: OK"
+
+      - name: Phase B — unauthenticated request shows login page (not 500)
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L \
+            http://localhost:8000/backend/backend/auth/signin)
+          echo "Unauthenticated request status: $STATUS"
+          test "$STATUS" = "200"
+
+      - name: Phase B — backend user without PostgreSQL role handled gracefully (not 500)
+        working-directory: ${{ github.workspace }}/wintercms
+        run: |
+          php -r '
+          define("LARAVEL_START", microtime(true));
+          require "vendor/autoload.php";
+          $app = require "bootstrap/app.php";
+          $app->make("Illuminate\Contracts\Console\Kernel")->bootstrap();
+          $u = new Backend\Models\User;
+          $u->login = "noroleuser";
+          $u->email = "norole@example.com";
+          $u->password = "testpassword123";
+          $u->password_confirmation = "testpassword123";
+          $u->first_name = "No";
+          $u->last_name = "Role";
+          $u->is_activated = true;
+          $u->forceSave();
+          echo "noroleuser created ID=" . $u->id . "\n";
+          '
+          NOROLE_ID=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT id FROM backend_users WHERE login = 'noroleuser';" | tr -d ' ')
+          PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -c "DROP ROLE IF EXISTS noroleuser;"
+          PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -c "DROP ROLE IF EXISTS token_wintercms_$NOROLE_ID;"
+          echo "PG roles dropped — simulating missing-role scenario"
+          BODY=$(curl -s -L -c /tmp/cookies_norole.txt -b /tmp/cookies_norole.txt \
+            http://localhost:8000/backend/backend/auth/signin)
+          TOKEN=$(echo "$BODY" | grep -o 'name="csrf-token" content="[^"]*"' | sed 's/.*content="\([^"]*\)"/\1/' | head -1)
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -c /tmp/cookies_norole.txt -b /tmp/cookies_norole.txt \
+            --data-urlencode "_token=$TOKEN" \
+            --data-urlencode "login=noroleuser" \
+            --data-urlencode "password=testpassword123" \
+            -d "postback=1" \
+            http://localhost:8000/backend/backend/auth/signin)
+          echo "Login without PG role: $STATUS (must not be 500)"
+          test "$STATUS" != "500"
+          test "$STATUS" != "000"
+          echo "DBAuth handles missing PG role gracefully: OK"
 
       - name: Dump PHP server logs on failure
         if: failure()
