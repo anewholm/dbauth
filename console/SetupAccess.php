@@ -99,6 +99,7 @@ class SetupAccess extends Command
         {--enable-auto-create : Enable the auto_create_db_user DBAuth setting}
         {--artisan-role       : Create/verify the "artisan" role for ARTISAN_AUTO_LOGIN}
         {--artisan-password=  : Password for the artisan role (defaults to --password)}
+        {--template-role=     : Create/verify the non-login template role that session users inherit grants from}
         {--promote            : Harden this installation for production (see class docblock)}
         {--drop-dev-roles     : Also drop createsystem and demo PG roles (use with --promote)}
     ';
@@ -137,6 +138,14 @@ class SetupAccess extends Command
         $mode = $this->checkOnly ? '<comment>CHECK</comment>' : '<info>SETUP</info>';
         $this->line("DBAuth access $mode — login: <info>$login</info>");
         $this->line('');
+
+        // ── Step 0: Template role ─────────────────────────────────────────────
+        // The template role is a non-login PostgreSQL role whose grants all session
+        // users inherit. Run dbauth:setup-access --template-role=wintercms_app once
+        // after installation to create it. Named and token roles then inherit via
+        // GRANT wintercms_app TO <role> rather than receiving individual GRANT ALLs.
+        $templateRole = $this->option('template-role');
+        if ($templateRole) $this->checkTemplateRole($templateRole);
 
         // ── Step 1: Verify DBAuth sentinel is active ──────────────────────────
         // DBAuth only intercepts logins when DB_USERNAME=<DBAUTH> in .env.
@@ -417,6 +426,25 @@ class SetupAccess extends Command
     // =========================================================================
     // Check/setup methods
     // =========================================================================
+
+    /**
+     * Create or verify the non-login template role with WinterCMS grants.
+     *
+     * Grants SELECT/INSERT/UPDATE/DELETE on all existing tables plus ALTER DEFAULT
+     * PRIVILEGES so future plugin migrations automatically get the same access.
+     * No custom GRANTs are needed from the developer for plugins using the public schema.
+     */
+    private function checkTemplateRole(string $roleName): void
+    {
+        $this->line('');
+        $this->line("  Template role: <info>$roleName</info>");
+        $database = DBManager::configDatabase('database');
+        DBManager::createTemplateRole($roleName, $database);
+        Settings::set('template_role', $roleName);
+        $this->info("  [✓] Template role '$roleName' ready (covers all public schema tables including future plugin migrations).");
+        $this->line("      For non-public schemas or RLS policies, add grants manually:");
+        $this->line("        GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA <schema> TO \"$roleName\";");
+    }
 
     /**
      * Verify that the DBAuth sentinel (DB_USERNAME=<DBAUTH>) is active.

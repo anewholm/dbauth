@@ -41,3 +41,8 @@ fields:
         type: text
         span: right
         comment: dbauth::lang.models.settings.sessions_location_comment
+    template_role:
+        label: dbauth::lang.models.settings.template_role
+        type: text
+        span: left
+        comment: dbauth::lang.models.settings.template_role_comment

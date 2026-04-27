@@ -69,6 +69,8 @@
             'encrypt_sessions_comment' => 'Session keys and transport are SSL encrypted but Session data files, including the temporary database login id and password, are stored in plain text in the session file by default. Turn this on to encrypt session files.',
             'sessions_location' => 'Location of session files',
             'sessions_location_comment' => 'Change the default location of the session files to better hide them',
+            'template_role' => 'Template PostgreSQL role',
+            'template_role_comment' => 'Non-login role that all session users inherit grants from. Run: php artisan dbauth:setup-access --template-role=wintercms_app to create it.',
         ],
     ],
 ];

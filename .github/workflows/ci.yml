@@ -101,9 +101,43 @@ jobs:
       # even when DB_USERNAME != <DBAUTH>. On a login POST it substitutes the
       # form credentials, so the 'admin' role must exist before Phase A tests.
 
-      - name: Set up DBAuth roles and admin credentials
+      - name: Set up DBAuth roles, template role, and admin credentials
         working-directory: ${{ github.workspace }}/wintercms
-        run: php artisan dbauth:setup-access --login=admin --password=testpassword123 --enable-auto-create --artisan-role --artisan-password=testpassword
+        run: php artisan dbauth:setup-access --login=admin --password=testpassword123 --enable-auto-create --artisan-role --artisan-password=testpassword --template-role=wintercms_app
+
+      - name: Phase A — wintercms_app template role exists and is NOLOGIN
+        run: |
+          COUNT=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT count(*) FROM pg_roles WHERE rolname = 'wintercms_app' AND rolcanlogin = false;" | tr -d ' ')
+          echo "wintercms_app NOLOGIN count: $COUNT"
+          test "$COUNT" = "1"
+
+      - name: Phase A — admin role inherits from wintercms_app
+        run: |
+          COUNT=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT count(*) FROM pg_auth_members m
+                   JOIN pg_roles r  ON r.oid  = m.roleid
+                   JOIN pg_roles mr ON mr.oid = m.member
+                   WHERE r.rolname = 'wintercms_app' AND mr.rolname = 'admin';" | tr -d ' ')
+          echo "admin->wintercms_app membership count: $COUNT"
+          test "$COUNT" = "1"
+
+      - name: Phase A — template_role setting persisted to database
+        working-directory: ${{ github.workspace }}/wintercms
+        run: |
+          SETTING=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT value FROM system_settings WHERE item = 'acorn_auth_settings' LIMIT 1;")
+          echo "Settings row: ${SETTING:0:200}"
+          echo "$SETTING" | grep -q "wintercms_app"
+          echo "template_role setting: OK"
+
+      - name: Phase A — hard fail when granting non-existent template role (PostgreSQL-level)
+        run: |
+          OUTPUT=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -c "GRANT nonexistent_template_role_xyz TO admin;" 2>&1 || true)
+          echo "Output: $OUTPUT"
+          echo "$OUTPUT" | grep -qi "does not exist"
+          echo "Hard fail verified: PostgreSQL rejects GRANT of missing role"
 
       # ── Phase A: DB_USERNAME=createsystem (standard WinterCMS login page) ─────
       # DBAuth is installed but the <DBAUTH> sentinel is not set. The standard
@@ -239,6 +273,19 @@ jobs:
             -t -c "SELECT count(*) FROM pg_roles WHERE rolname = 'token_wintercms_$ID';" | tr -d ' ')
           echo "testuser2 token role (token_wintercms_$ID): $COUNT"
           test "$COUNT" = "1"
+
+      - name: Phase A — testuser2 named and token roles inherit from wintercms_app
+        run: |
+          ID=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT id FROM backend_users WHERE login = 'testuser2';" | tr -d ' ')
+          COUNT=$(PGPASSWORD=testpassword psql -h 127.0.0.1 -U createsystem -d wintercms \
+            -t -c "SELECT count(*) FROM pg_auth_members m
+                   JOIN pg_roles r  ON r.oid  = m.roleid
+                   JOIN pg_roles mr ON mr.oid = m.member
+                   WHERE r.rolname = 'wintercms_app'
+                     AND mr.rolname IN ('testuser2', 'token_wintercms_$ID');" | tr -d ' ')
+          echo "testuser2 roles inheriting wintercms_app: $COUNT (expect 2)"
+          test "$COUNT" = "2"
 
       - name: Phase A — create noroleuser without PostgreSQL roles (for Phase B graceful-error test)
         working-directory: ${{ github.workspace }}/wintercms

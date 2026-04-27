@@ -565,6 +565,19 @@ class ServiceProvider extends ModuleServiceProvider
             }
         }
 
+        $templateRole = Settings::get('template_role');
+        if ($templateRole && !DBManager::dbUserExists($templateRole)) {
+            $hints['hint_no_template_role'] = [
+                'label'      => "Template role \"$templateRole\" not found in PostgreSQL.",
+                'comment'    => "Run: php artisan dbauth:setup-access --template-role=$templateRole",
+                'type'       => 'section',
+                'tab'        => self::$tab,
+                'span'       => 'storm',
+                'cssClass'   => 'col-xs-12',
+                'permissions' => array('dbauth.setup_user'),
+            ];
+        }
+
         return $hints;
     }
 
@@ -759,58 +772,6 @@ class ServiceProvider extends ModuleServiceProvider
                 'permissions' => array('dbauth.setup_user'),
             ],
 
-            // Schema usage etc.
-            '_acorn_grant_database_usage' => [
-                'label'   => 'dbauth::lang.models.user.grant_database_usage',
-                'type'    => 'checkbox',
-                'tab'     => self::$tab,
-                'required' => true,
-                'span'    => 'storm',
-                'cssClass'   => 'col-xs-12 col-md-4',
-                'attributes' => array('autocomplete' => 'off', 'checked' => true),
-                'comment' => 'dbauth::lang.models.user.grant_database_usage_comment',
-                'permissions' => array('dbauth.setup_user'),
-            ],
-            '_acorn_grant_schema_usage' => [
-                'label'   => 'dbauth::lang.models.user.schema_usage',
-                'type'    => 'checkbox',
-                'tab'     => self::$tab,
-                'required' => true,
-                'span'    => 'storm',
-                'cssClass'   => 'col-xs-12 col-md-4',
-                'attributes' => array('autocomplete' => 'off', 'checked' => true),
-                'comment' => 'dbauth::lang.models.user.schema_usage_comment',
-                'permissions' => array('dbauth.setup_user'),
-            ],
-            '_acorn_grant_tables_all' => [
-                'label'   => 'dbauth::lang.models.user.grant_tables_all',
-                'type'    => 'checkbox',
-                'tab'     => self::$tab,
-                'span'    => 'storm',
-                'cssClass' => 'col-xs-12 col-md-4',
-                'attributes' => array('autocomplete' => 'off', 'checked' => true),
-                'permissions' => array('dbauth.setup_user'),
-            ],
-            '_acorn_grant_sequences_all' => [
-                'label'    => 'dbauth::lang.models.user.grant_sequences_all',
-                'type'     => 'checkbox',
-                'tab'      => self::$tab,
-                'span'     => 'storm',
-                'cssClass' => 'col-xs-12 col-md-4',
-                'attributes' => array('autocomplete' => 'off', 'checked' => true),
-                'comment'  => 'dbauth::lang.models.user.grant_sequences_all_comment',
-                'commentHtml' => TRUE,
-                'permissions' => array('dbauth.setup_user'),
-            ],
-            '_acorn_grant_functions_all' => [
-                'label'   => 'dbauth::lang.models.user.grant_functions_all',
-                'type'    => 'checkbox',
-                'tab'     => self::$tab,
-                'span'    => 'storm',
-                'cssClass' => 'col-xs-12 col-md-4',
-                'attributes' => array('autocomplete' => 'off', 'checked' => true),
-                'permissions' => array('dbauth.setup_user'),
-            ],
         ));
 
         return $fields;

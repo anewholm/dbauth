@@ -4,6 +4,7 @@ use DB;
 use Illuminate\Support\Facades\Config;
 use Exception;
 use Illuminate\Database\Connectors\ConnectionFactory;
+use DBAuth\Models\Settings;
 
 class PostGreSQLManager {
     public static function configDatabase(string|NULL $key = NULL): array|string
@@ -32,7 +33,6 @@ class PostGreSQLManager {
 
     public static function dbUserExists(string|NULL $login): bool
     {
-        // TODO: Prepare statement for DB::select
         $loginString = self::escapeSQLName($login, "'");
         return (bool) ($login 
             ? DB::select("SELECT 1 FROM pg_roles WHERE rolname=$loginString;")
@@ -84,6 +84,11 @@ class PostGreSQLManager {
         $loginName      = self::escapeSQLName($login);
         $userExists     = self::dbUserExists($login);
         if ($userExists) {
+            $templateRole = Settings::get('template_role');
+            if ($templateRole) {
+                $templateRoleN = self::escapeSQLName($templateRole);
+                try { DB::unprepared("REVOKE $templateRoleN FROM $loginName;"); } catch (Exception $e) {}
+            }
             DB::unprepared("REVOKE ALL ON ALL FUNCTIONS IN schema public from $loginName CASCADE;");
             DB::unprepared("REVOKE ALL ON ALL SEQUENCES IN schema public from $loginName CASCADE;");
             DB::unprepared("REVOKE ALL ON ALL TABLES IN schema public from $loginName CASCADE;");
@@ -154,6 +159,42 @@ class PostGreSQLManager {
         return TRUE;
     }
 
+    /**
+     * Create a non-login template role with the standard WinterCMS grant set.
+     *
+     * The role is created with NOLOGIN (session users inherit grants via GRANT role TO user).
+     * Grants cover all existing tables/sequences/functions in the public schema, plus
+     * ALTER DEFAULT PRIVILEGES so future plugin migrations get the same access automatically.
+     * No custom GRANTs are needed from the developer for plugins that use the public schema.
+     */
+    public static function createTemplateRole(string $roleName, string $database): void
+    {
+        $roleN = self::escapeSQLName($roleName);
+        $dbN   = self::escapeSQLName($database);
+        try { DB::unprepared("CREATE ROLE $roleN NOLOGIN;"); } catch (Exception $e) {}
+        DB::unprepared("GRANT CONNECT ON DATABASE $dbN TO $roleN;");
+        DB::unprepared("GRANT USAGE ON SCHEMA public TO $roleN;");
+        DB::unprepared("GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO $roleN;");
+        DB::unprepared("GRANT USAGE,UPDATE ON ALL SEQUENCES IN SCHEMA public TO $roleN;");
+        DB::unprepared("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO $roleN;");
+        // Future tables/sequences/functions created by plugin migrations also get grants
+        DB::unprepared("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT,INSERT,UPDATE,DELETE ON TABLES TO $roleN;");
+        DB::unprepared("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE,UPDATE ON SEQUENCES TO $roleN;");
+        DB::unprepared("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO $roleN;");
+    }
+
+    /**
+     * Grant a non-login template role to a session login user so it inherits all grants.
+     * Hard-fails (Exception) if the template role does not exist — run dbauth:setup-access
+     * --template-role=<name> to create it before creating session users.
+     */
+    public static function grantTemplateRole(string $login, string $roleName): void
+    {
+        $roleN  = self::escapeSQLName($roleName);
+        $loginN = self::escapeSQLName($login);
+        DB::unprepared("GRANT $roleN TO $loginN;");
+    }
+
     public static function createDBUser(string $login, string $password, bool $asSuperUser = FALSE, bool $withCreateRole = FALSE, array|NULL $options = NULL, array|NULL $associateUsers = NULL): bool
     {
         $database       = self::configDatabase('database');
@@ -183,19 +224,24 @@ class PostGreSQLManager {
             }
         }
 
-        // $options come from the DatabaseAuthorisation <form>
-        // TODO: This is too much DB GRANT access! Let's reduce it
-        // TODO: Maybe use a clone user for DB GRANTS?
-        if (self::hasOption($options, 'grant_database_usage') && $database) 
-            DB::unprepared("GRANT ALL ON DATABASE $databaseName TO $loginName;");
-        if (self::hasOption($options, 'grant_schema_usage')) 
-            DB::unprepared("GRANT ALL ON SCHEMA public TO $loginName;");
-        if (self::hasOption($options, 'grant_tables_all')) 
-            DB::unprepared("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $loginName;");
-        if (self::hasOption($options, 'grant_sequences_all')) 
-            DB::unprepared("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $loginName;");
-        if (self::hasOption($options, 'grant_functions_all')) 
-            DB::unprepared("GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO $loginName;");
+        $templateRole = Settings::get('template_role');
+        if ($templateRole) {
+            // Inherit all grants from the template role. Hard-fails if the role was deleted —
+            // the admin must re-run dbauth:setup-access --template-role=<name> to recreate it.
+            self::grantTemplateRole($login, $templateRole);
+        } else {
+            // Legacy fallback for installs that have not configured a template role.
+            if (self::hasOption($options, 'grant_database_usage') && $database)
+                DB::unprepared("GRANT ALL ON DATABASE $databaseName TO $loginName;");
+            if (self::hasOption($options, 'grant_schema_usage'))
+                DB::unprepared("GRANT ALL ON SCHEMA public TO $loginName;");
+            if (self::hasOption($options, 'grant_tables_all'))
+                DB::unprepared("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $loginName;");
+            if (self::hasOption($options, 'grant_sequences_all'))
+                DB::unprepared("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $loginName;");
+            if (self::hasOption($options, 'grant_functions_all'))
+                DB::unprepared("GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO $loginName;");
+        }
 
         return TRUE;
     }
