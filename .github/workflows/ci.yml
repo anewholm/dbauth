@@ -295,6 +295,14 @@ jobs:
             sleep 1
           done
 
+      - name: Phase B — artisan list works with ARTISAN_AUTO_LOGIN=1
+        working-directory: ${{ github.workspace }}/wintercms
+        run: |
+          OUTPUT=$(php artisan list 2>&1)
+          echo "$OUTPUT" | grep -qi "dbauth\|Available commands" \
+            || (echo "ERROR: artisan list failed or DBAuth commands missing"; echo "$OUTPUT" | head -40; exit 1)
+          echo "ARTISAN_AUTO_LOGIN=1: artisan bootstraps cleanly and DBAuth commands are registered"
+
       - name: Phase B — DBAuth custom login page served
         run: |
           BODY=$(curl -s -L http://localhost:8000/backend/backend/auth/signin)

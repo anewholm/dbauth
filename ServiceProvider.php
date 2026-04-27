@@ -118,28 +118,6 @@ class ServiceProvider extends ModuleServiceProvider
                 }
             });
 
-            // Trap Session / Cookie admin_auth on subsequent requests
-            // to login with the token_$id user
-            // TODO: This is also done in register() so artisan runs it. Maybe delete this one
-            app('db')->extend('pgsql', function($config, $name){
-                $config = $this->morphConfig($config);
-
-                // If neither a login, nor a token
-                // then config will still == <DBAUTH>
-                // so we cannot connect to the database
-                if ($config['username'] == '<DBAUTH>') {
-                    // showLoginScreen() may exit()
-                    // However, if this is artisan, it might return a username
-                    $config = $this->showLoginScreen($config);
-                    if ($config['username'] == '<DBAUTH>') 
-                        throw new PDOException("No username provided for database connection");
-                }
-
-                // Connect with the Config::* morphed credentials
-                $connFactory = new ConnectionFactory(app());
-                return $connFactory->make($config, $name);
-            });
-
             // Immediately test the connection to surface auth/permission errors early.
             // Note: authorisation has not happened yet — we cannot get username/id from session.
             // Use SELECT 1 (no table dependency) so login is never gated on an optional plugin
@@ -458,9 +436,11 @@ class ServiceProvider extends ModuleServiceProvider
     {
         parent::register();
 
-        // Trap Session / Cookie admin_auth on subsequent requests
-        // to login with the token_$id user
-        // TODO: This is also done in boot() but artisan does not run it. Maybe delete that one
+        // Intercept all pgsql connections and substitute the real credentials.
+        // Registered in register() rather than boot() because register() runs before all boot()
+        // calls — any ServiceProvider that touches the DB during its own register() phase would
+        // otherwise connect before this hook is in place. morphConfig() is a no-op when
+        // DB_USERNAME != '<DBAUTH>', so this is safe to run unconditionally.
         app('db')->extend('pgsql', function($config, $name){
             $config = $this->morphConfig($config);
 
