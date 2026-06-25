@@ -9,7 +9,7 @@ class DbBackendUsersSyncDbUser extends Migration
     {
         // Add extra namespaced fields in to the backend_users table
         Schema::table('backend_users', function(Blueprint $table) {
-            if (!Schema::hasColumn($table->getTable(), 'acorn_create_sync_user')) 
+            if (!Schema::hasColumn($table->getTable(), 'acorn_create_sync_user'))
                 $table->boolean('acorn_create_sync_user')->default(TRUE);
         });
 
@@ -18,7 +18,8 @@ class DbBackendUsersSyncDbUser extends Migration
         // backend_users only so DBAuth works without the private User module.
         if (Schema::hasTable('acorn_user_users') && Schema::hasColumn('backend_users', 'acorn_user_user_id')) {
             $this->createView('acorn_dbauth_user', <<<BODY
-                select bk.id as backend_id, bk.login as backend_login, u.*
+                select
+                    bk.id as backend_id, bk.login as backend_login, u.*
                 from backend_users bk
                 inner join acorn_user_users u on bk.acorn_user_user_id = u.id
                 where bk.id = CASE
@@ -30,13 +31,22 @@ BODY
             );
         } else {
             $this->createView('acorn_dbauth_user', <<<BODY
-                select bk.id as backend_id, bk.login as backend_login, bk.*
+                select
+                    bk.id as backend_id, bk.login as backend_login, bk.*
                 from backend_users bk
-                where bk.id = CASE
-                    WHEN CURRENT_USER ~ ('^token_' || CURRENT_DATABASE() || '_[0-9]+$'::text)
-                        THEN replace(CURRENT_USER::text, 'token_'::text || CURRENT_DATABASE() || '_', ''::text)::integer
-                    else NULL
-                END;
+                WHERE id =
+                        CASE
+                            WHEN CURRENT_USER ~ (('^token_'::text || current_database()::text) || '_[0-9]+$'::text) THEN replace(CURRENT_USER::text, ('token_'::text || current_database()::text) || '_'::text, ''::text)::integer
+                            WHEN (select count(*) > 0 FROM backend_users where login = CURRENT_USER) THEN (select id FROM backend_users where login = CURRENT_USER)
+                            ELSE (CASE CURRENT_USER
+                                WHEN CURRENT_DATABASE() THEN 1
+                                WHEN 'anewholm' THEN 1
+                                WHEN 'admin' THEN 1
+                                WHEN 'root' THEN 1
+                                WHEN 'sanchez' THEN 1
+                            END
+                            )
+                        END;
 BODY
             );
         }
@@ -45,7 +55,7 @@ BODY
     public function down()
     {
         Schema::table('backend_users', function(Blueprint $table) {
-            if (Schema::hasColumn($table->getTable(), 'acorn_create_sync_user')) 
+            if (Schema::hasColumn($table->getTable(), 'acorn_create_sync_user'))
                 $table->dropColumn('acorn_create_sync_user');
         });
     }
