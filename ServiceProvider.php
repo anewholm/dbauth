@@ -31,13 +31,13 @@ use DBAuth\Console\SetupAccess;
 class ServiceProvider extends ModuleServiceProvider
 {
     use \System\Traits\SecurityController;
-    
+
     static $tab = 'dbauth::lang.module.name';
 
     // ----------------------------------------------------- Status
     protected function isEnabled(): bool
     {
-        // config/database.php username=<DBAUTH> necessary for this functionality 
+        // config/database.php username=<DBAUTH> necessary for this functionality
         return DBManager::configDatabase('username') == '<DBAUTH>';
     }
 
@@ -53,7 +53,7 @@ class ServiceProvider extends ModuleServiceProvider
             throw new Exception('User has no ID during tokenLoginName()');
         return self::tokenLoginNameFromID($backendUser->id);
     }
-    
+
     public static function tokenLoginNameFromID(int $id): string
     {
         // Database is included for multiple DB servers
@@ -118,6 +118,28 @@ class ServiceProvider extends ModuleServiceProvider
                 }
             });
 
+            // Trap Session / Cookie admin_auth on subsequent requests
+            // to login with the token_$id user
+            // TODO: This is also done in register() so artisan runs it. Maybe delete this one
+            app('db')->extend('pgsql', function($config, $name){
+                $config = $this->morphConfig($config);
+
+                // If neither a login, nor a token
+                // then config will still == <DBAUTH>
+                // so we cannot connect to the database
+                if ($config['username'] == '<DBAUTH>') {
+                    // showLoginScreen() may exit()
+                    // However, if this is artisan, it might return a username
+                    $config = $this->showLoginScreen($config);
+                    if ($config['username'] == '<DBAUTH>')
+                        throw new PDOException("No username provided for database connection");
+                }
+
+                // Connect with the Config::* morphed credentials
+                $connFactory = new ConnectionFactory(app());
+                return $connFactory->make($config, $name);
+            });
+
             // Immediately test the connection to surface auth/permission errors early.
             // Note: authorisation has not happened yet — we cannot get username/id from session.
             // Use SELECT 1 (no table dependency) so login is never gated on an optional plugin
@@ -135,61 +157,63 @@ class ServiceProvider extends ModuleServiceProvider
             }
         }
 
-        // --------------------------------------- Extend Backend users fields and columns for management
-        Users::extendListColumns(function ($list, $user) {
-            if ($user instanceof User) {
-                $authUser = BackendAuth::user();
-                if ($authUser && $authUser->is_superuser) {
-                    $list->addColumns($this->userColumns());
+        if ($this->isEnabled()) {
+            // --------------------------------------- Extend Backend users fields and columns for management
+            Users::extendListColumns(function ($list, $user) {
+                if ($user instanceof User) {
+                    $authUser = BackendAuth::user();
+                    if ($authUser && $authUser->is_superuser) {
+                        $list->addColumns($this->userColumns());
+                    }
                 }
-            }
-        });
+            });
 
-        Users::extendFormFields(function ($form, $user, $context) {
-            if ($user instanceof User) {
-                $authUser = BackendAuth::user();
+            Users::extendFormFields(function ($form, $user, $context) {
+                if ($user instanceof User) {
+                    $authUser = BackendAuth::user();
 
-                // -------------------------- onSave create|update the DB user
-                $user->bindEvent('model.afterSave', function () use(&$user) {
-                    return $this->afterSave($user);
-                });
-                $user->bindEvent('model.afterDelete', function () use(&$user) {
-                    return $this->afterDelete($user);
-                });
-                
-                // -------------------------- Fields
-                // Only a super user can use these tools
-                // on others accounts so far
-                $form->getController()->addViewPath('modules/dbauth/partials');
-                $form->addTabFields($this->hints($user));
-                $form->addTabFields($this->userFields());
-                
-                // DBAuth cannot allow logins to be changed currently
-                // Disable the login field
-                if ($user->exists) {
-                    $field = $form->getField('login');
-                    $field->disabled = true;
-                    $field->comment  = 'dbauth::lang.models.user.login_fixed';
+                    // -------------------------- onSave create|update the DB user
+                    $user->bindEvent('model.afterSave', function () use(&$user) {
+                        return $this->afterSave($user);
+                    });
+                    $user->bindEvent('model.afterDelete', function () use(&$user) {
+                        return $this->afterDelete($user);
+                    });
+
+                    // -------------------------- Fields
+                    // Only a super user can use these tools
+                    // on others accounts so far
+                    $form->getController()->addViewPath('modules/dbauth/partials');
+                    $form->addTabFields($this->hints($user));
+                    $form->addTabFields($this->userFields());
+
+                    // DBAuth cannot allow logins to be changed currently
+                    // Disable the login field
+                    if ($user->exists) {
+                        $field = $form->getField('login');
+                        $field->disabled = true;
+                        $field->comment  = 'dbauth::lang.models.user.login_fixed';
+                    }
+
+                    // Email
+                    $field = $form->getField('email');
+                    $field->comment  = 'dbauth::lang.models.user.email_optional';
+
+                    // Permissions to password fields
+                    $isMe = $user->is($authUser);
+                    if ($isMe && !$authUser->hasPermission('dbauth.backend.user_own_password_change')) {
+                        $field = $form->getField('password');
+                        $field->disabled = true;
+                        $field->comment  = 'dbauth::lang.permissions.no_password_change_comment';
+                        $form->getField('password_confirmation')->hidden = true;
+                    }
                 }
+            });
 
-                // Email
-                $field = $form->getField('email');
-                $field->comment  = 'dbauth::lang.models.user.email_optional';
-
-                // Permissions to password fields
-                $isMe = $user->is($authUser);
-                if ($isMe && !$authUser->hasPermission('dbauth.backend.user_own_password_change')) {
-                    $field = $form->getField('password');
-                    $field->disabled = true;
-                    $field->comment  = 'dbauth::lang.permissions.no_password_change_comment';
-                    $form->getField('password_confirmation')->hidden = true;
-                }
-            }
-        });
-
-        BackendAuth::registerCallback(function ($manager) {
-            $manager->registerPermissions('DBAuth', $this->registerPermissions());
-        });
+            BackendAuth::registerCallback(function ($manager) {
+                $manager->registerPermissions('DBAuth', $this->registerPermissions());
+            });
+        }
 
         // VERSION: Winter 1.2.6: send also parameter ('dbauth');
         // But does not seem to cause a problem if ommitted
@@ -258,7 +282,7 @@ class ServiceProvider extends ModuleServiceProvider
                 }
             }
         } catch (Exception $ex) {
-            // Potentially invalid JSON 
+            // Potentially invalid JSON
             // or other format problems
             $authArray = NULL;
         }
@@ -340,7 +364,7 @@ class ServiceProvider extends ModuleServiceProvider
                 $connConfig        = DB::connection()->getConfig();
                 $exceptionMessage .= " Connecting as user $connConfig[username] with password [$connConfig[password]]";
             }
-        }   
+        }
 
         if ($this->app->runningInConsole()) {
             if ($exceptionMessage) print("\e[1;37;41m$exceptionMessage\e[0m\n");
@@ -362,8 +386,8 @@ class ServiceProvider extends ModuleServiceProvider
             }
             $config['username'] = $username;
             $config['password'] = $password;
-        } 
-        
+        }
+
         else { // HTTP call
             Session::start();
             // This is likely an old backend persist token causing failed token_% DB connect.
@@ -407,7 +431,7 @@ class ServiceProvider extends ModuleServiceProvider
                 // as it may well try to connect to the database
                 // and we have no credentials to do so
                 exit(0);
-            } 
+            }
             else {
                 // Well, it is a front-end request
                 // which does NOT mean there is a front-end necessarily
@@ -426,7 +450,7 @@ class ServiceProvider extends ModuleServiceProvider
         $dir     = dirname(__FILE__);
         $docroot = $this->app->basePath();
         $path    = "$docroot/public/resources/login.php";
-        if (!File::exists($path)) 
+        if (!File::exists($path))
             $path = "$dir/resources/login.php";
         return $path;
     }
@@ -436,11 +460,9 @@ class ServiceProvider extends ModuleServiceProvider
     {
         parent::register();
 
-        // Intercept all pgsql connections and substitute the real credentials.
-        // Registered in register() rather than boot() because register() runs before all boot()
-        // calls — any ServiceProvider that touches the DB during its own register() phase would
-        // otherwise connect before this hook is in place. morphConfig() is a no-op when
-        // DB_USERNAME != '<DBAUTH>', so this is safe to run unconditionally.
+        // Trap Session / Cookie admin_auth on subsequent requests
+        // to login with the token_$id user
+        // TODO: This is also done in boot() but artisan does not run it. Maybe delete that one
         app('db')->extend('pgsql', function($config, $name){
             $config = $this->morphConfig($config);
 
@@ -451,7 +473,7 @@ class ServiceProvider extends ModuleServiceProvider
                 // showLoginScreen() may exit()
                 // However, if this is artisan, it might return a username
                 $config = $this->showLoginScreen($config);
-                if ($config['username'] == '<DBAUTH>') 
+                if ($config['username'] == '<DBAUTH>')
                     throw new PDOException("No username provided for database connection");
             }
 
@@ -473,7 +495,7 @@ class ServiceProvider extends ModuleServiceProvider
 
         $username      = DBManager::configDatabase('username');
         $password      = DBManager::configDatabase('password');
-        
+
         if ($username != '<DBAUTH>' || $password != '<DBAUTH>')
             $hints['hint_not_setup'] = [
                 'label'    => '',
@@ -531,7 +553,7 @@ class ServiceProvider extends ModuleServiceProvider
                     'cssClass' => 'col-xs-12 col-md-4',
                     'permissions' => array('dbauth.setup_user'),
                 ];
-                
+
                 if (!$dbUserAttributes['CREATEROLE']) $hints['hint_db_user_createrole'] = [
                     'label'    => '',
                     'tab'      => self::$tab,
@@ -563,19 +585,6 @@ class ServiceProvider extends ModuleServiceProvider
                     'permissions' => array('dbauth.setup_user'),
                 ];
             }
-        }
-
-        $templateRole = Settings::get('template_role');
-        if ($templateRole && !DBManager::dbUserExists($templateRole)) {
-            $hints['hint_no_template_role'] = [
-                'label'      => "Template role \"$templateRole\" not found in PostgreSQL.",
-                'comment'    => "Run: php artisan dbauth:setup-access --template-role=$templateRole",
-                'type'       => 'section',
-                'tab'        => self::$tab,
-                'span'       => 'storm',
-                'cssClass'   => 'col-xs-12',
-                'permissions' => array('dbauth.setup_user'),
-            ];
         }
 
         return $hints;
@@ -611,7 +620,7 @@ class ServiceProvider extends ModuleServiceProvider
         // However, CURRENT_USER will always be the token_% DB user
         // so access to the original normal login conditional on a permission check
         // both CREATEROLE and ADMIN option on the normal user are required
-        // Users *will* have to make an initial login with the normal user again 
+        // Users *will* have to make an initial login with the normal user again
         // once their user_id cookie => token_% is expired or not available
         $authUser        = BackendAuth::user();
         $isCurrentUser   = $aBackendUser->is($authUser);
@@ -626,7 +635,7 @@ class ServiceProvider extends ModuleServiceProvider
             if ($tokenLogin != $dbCURRENT_USER)
                 throw new Exception("DB CURRENT_USER [$dbCURRENT_USER] is not the token backend user [$tokenLogin] during isCurrentUser mode update");
         }
-        
+
         if ($canUpdateOthers || $isCurrentUser) {
             $purgeValues     = $aBackendUser->getOriginalPurgeValues();
             $password        = (isset($purgeValues['password_confirmation']) ? $purgeValues['password_confirmation'] : NULL);
@@ -641,10 +650,10 @@ class ServiceProvider extends ModuleServiceProvider
                     if (!$password)
                         throw new Exception("Cannot create DB user [$aBackendUser->login] becaues initial password not provided");
                     $created = DBManager::createDBUser(
-                        $aBackendUser->login, 
+                        $aBackendUser->login,
                         $password,
-                        // SUPERUSER Not necessary because token_% login is used 
-                        FALSE, 
+                        // SUPERUSER Not necessary because token_% login is used
+                        FALSE,
                         // Needs to update token_% during login
                         TRUE,
                         $purgeValues // GRANTS
@@ -654,9 +663,9 @@ class ServiceProvider extends ModuleServiceProvider
                 if (!DBManager::dbUserExists($tokenLogin)) {
                     // token_% based on backend_user.id. Does not change after
                     $created = DBManager::createDBUser(
-                        $tokenLogin, 
+                        $tokenLogin,
                         // password / persistCode updated during login above
-                        $aBackendUser->getRandomString(), 
+                        $aBackendUser->getRandomString(),
                         $aBackendUser->is_superuser,
                         // Does not need to make any changes to other users
                         FALSE,
@@ -673,7 +682,7 @@ class ServiceProvider extends ModuleServiceProvider
                     // Password has been changed in backend_users
                     // Update the normal DB user
                     // We are never this user, only token_% or another (super)user
-                    // This requires SUPERUSER 
+                    // This requires SUPERUSER
                     // or token_% CREATEROLE and ADMIN OPTION for the CURRENT_USER on the normal role
                     // However, we do not grant ADMIN OPTION to the token_% role
                     // So the old password will be required in this case
@@ -691,7 +700,7 @@ class ServiceProvider extends ModuleServiceProvider
                                     // TODO: Maybe move this to a Flash in beforeSave()?
                                     throw new Exception($messageNice);
                                     break;
-                                default: 
+                                default:
                                     throw $ex;
                             }
                         } else {
@@ -772,6 +781,58 @@ class ServiceProvider extends ModuleServiceProvider
                 'permissions' => array('dbauth.setup_user'),
             ],
 
+            // Schema usage etc.
+            '_acorn_grant_database_usage' => [
+                'label'   => 'dbauth::lang.models.user.grant_database_usage',
+                'type'    => 'checkbox',
+                'tab'     => self::$tab,
+                'required' => true,
+                'span'    => 'storm',
+                'cssClass'   => 'col-xs-12 col-md-4',
+                'attributes' => array('autocomplete' => 'off', 'checked' => true),
+                'comment' => 'dbauth::lang.models.user.grant_database_usage_comment',
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            '_acorn_grant_schema_usage' => [
+                'label'   => 'dbauth::lang.models.user.schema_usage',
+                'type'    => 'checkbox',
+                'tab'     => self::$tab,
+                'required' => true,
+                'span'    => 'storm',
+                'cssClass'   => 'col-xs-12 col-md-4',
+                'attributes' => array('autocomplete' => 'off', 'checked' => true),
+                'comment' => 'dbauth::lang.models.user.schema_usage_comment',
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            '_acorn_grant_tables_all' => [
+                'label'   => 'dbauth::lang.models.user.grant_tables_all',
+                'type'    => 'checkbox',
+                'tab'     => self::$tab,
+                'span'    => 'storm',
+                'cssClass' => 'col-xs-12 col-md-4',
+                'attributes' => array('autocomplete' => 'off', 'checked' => true),
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            '_acorn_grant_sequences_all' => [
+                'label'    => 'dbauth::lang.models.user.grant_sequences_all',
+                'type'     => 'checkbox',
+                'tab'      => self::$tab,
+                'span'     => 'storm',
+                'cssClass' => 'col-xs-12 col-md-4',
+                'attributes' => array('autocomplete' => 'off', 'checked' => true),
+                'comment'  => 'dbauth::lang.models.user.grant_sequences_all_comment',
+                'commentHtml' => TRUE,
+                'permissions' => array('dbauth.setup_user'),
+            ],
+            '_acorn_grant_functions_all' => [
+                'label'   => 'dbauth::lang.models.user.grant_functions_all',
+                'type'    => 'checkbox',
+                'tab'     => self::$tab,
+                'span'    => 'storm',
+                'cssClass' => 'col-xs-12 col-md-4',
+                'attributes' => array('autocomplete' => 'off', 'checked' => true),
+                'permissions' => array('dbauth.setup_user'),
+            ],
         ));
 
         return $fields;
@@ -794,7 +855,7 @@ class ServiceProvider extends ModuleServiceProvider
             ],
         ];
     }
-    
+
     public function registerSettings(): array
     {
         return [
