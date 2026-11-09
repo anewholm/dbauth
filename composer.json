@@ -3,7 +3,8 @@
   "type": "winter-module",
   "require": {
     "composer/installers": "~1.0",
-    "php": "^8"
+    "php": "^8",
+    "winter/wn-backend-module": "^1.2.15"
   },
   "autoload": {
     "psr-4": {

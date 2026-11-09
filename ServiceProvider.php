@@ -14,6 +14,7 @@ use DB;
 use File;
 use Lang;
 use Flash;
+use Backend\Controllers\MyAccount;
 use Backend\Controllers\Users;
 use System\Classes\SettingsManager;
 use Winter\Storm\Support\ModuleServiceProvider;
@@ -168,7 +169,11 @@ class ServiceProvider extends ModuleServiceProvider
                 }
             });
 
-            Users::extendFormFields(function ($form, $user, $context) {
+            // Two controllers edit a backend user: Users (the Administrators forms) and, since Winter 1.2.15,
+            // MyAccount, which is its own controller (Users::myaccount() only redirects there). Without
+            // MyAccount, a user's own password change on My account would update backend_users but not
+            // their DB role, and the login_fixed lock and user_own_password_change permission would not apply
+            $extendUserForm = function ($form, $user, $context) {
                 if ($user instanceof User) {
                     $authUser = BackendAuth::user();
 
@@ -208,7 +213,9 @@ class ServiceProvider extends ModuleServiceProvider
                         $form->getField('password_confirmation')->hidden = true;
                     }
                 }
-            });
+            };
+            Users::extendFormFields($extendUserForm);
+            MyAccount::extendFormFields($extendUserForm);
 
             BackendAuth::registerCallback(function ($manager) {
                 $manager->registerPermissions('DBAuth', $this->registerPermissions());
