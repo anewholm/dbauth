@@ -7,7 +7,7 @@ use Illuminate\Database\Connectors\ConnectionFactory;
 use DBAuth\Models\Settings;
 
 class PostGreSQLManager {
-    public static function configDatabase(string|NULL $key = NULL): array|string
+    public static function configDatabase(?string $key = NULL): array|string
     {
         $conn   = Config::get('database.default');
         $config = Config::get("database.connections.$conn");
@@ -31,7 +31,7 @@ class PostGreSQLManager {
         return self::escapeSQLName($name, $quote); 
     }
 
-    public static function dbUserExists(string|NULL $login): bool
+    public static function dbUserExists(?string $login): bool
     {
         $loginString = self::escapeSQLName($login, "'");
         return (bool) ($login 
@@ -111,7 +111,7 @@ class PostGreSQLManager {
         return $userExists;
     }
 
-    public static function updateDBPassword(string $password, string|NULL $login = NULL, string|NULL $oldPassword = NULL): bool
+    public static function updateDBPassword(string $password, ?string $login = NULL, ?string $oldPassword = NULL): bool
     {
         // NULL $login = CURRENT_USER
         $loginName      = (is_null($login) ? 'CURRENT_USER' : self::escapeSQLName($login));
@@ -141,7 +141,7 @@ class PostGreSQLManager {
         return TRUE;
     }
 
-    public static function makeSUPERUSER(string|NULL $login = NULL): bool
+    public static function makeSUPERUSER(?string $login = NULL): bool
     {
         // NULL $login = CURRENT_USER
         $loginName = (is_null($login) ? 'CURRENT_USER' : self::escapeSQLName($login));
@@ -150,7 +150,7 @@ class PostGreSQLManager {
         return TRUE;
     }
     
-    public static function clearSUPERUSER(string|NULL $login = NULL): bool
+    public static function clearSUPERUSER(?string $login = NULL): bool
     {
         // NULL $login = CURRENT_USER
         $loginName = (is_null($login) ? 'CURRENT_USER' : self::escapeSQLName($login));
@@ -195,7 +195,7 @@ class PostGreSQLManager {
         DB::unprepared("GRANT $roleN TO $loginN;");
     }
 
-    public static function createDBUser(string $login, string $password, bool $asSuperUser = FALSE, bool $withCreateRole = FALSE, array|NULL $options = NULL, array|NULL $associateUsers = NULL): bool
+    public static function createDBUser(string $login, string $password, bool $asSuperUser = FALSE, bool $withCreateRole = FALSE, ?array $options = NULL, ?array $associateUsers = NULL): bool
     {
         $database       = self::configDatabase('database');
         $databaseName   = self::escapeSQLName($database);

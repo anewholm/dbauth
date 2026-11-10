@@ -257,7 +257,7 @@ class ServiceProvider extends ModuleServiceProvider
         return $user;
     }
 
-    public static function getSessionAuthCookieArray(): array|NULL
+    public static function getSessionAuthCookieArray(): ?array
     {
         // Returns [backend_users.id, backend_users.persist_code]
         // An auth_token is the backend_users.persist_code

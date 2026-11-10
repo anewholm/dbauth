@@ -7,7 +7,7 @@ use Exception;
 use Backend\Models\User as BackendUser;
 use DBAuth\PostGreSQLManager as DBManager;
 use DBAuth\Models\Settings;
-use Winter\Storm\Console\Command;
+use Acorn\Console\Command;
 
 /**
  * DBAuth setup and verification console command.
